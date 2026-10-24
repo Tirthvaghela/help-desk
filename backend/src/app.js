@@ -9,7 +9,9 @@ const app = express();
 
 app.use(cors({ origin: env.clientUrl }));
 app.use(express.json({ limit: '100kb' }));
-app.use(morgan(env.nodeEnv === 'production' ? 'combined' : 'dev'));
+if (env.nodeEnv !== 'test') {
+  app.use(morgan(env.nodeEnv === 'production' ? 'combined' : 'dev'));
+}
 
 app.use('/api/health', healthRoutes);
 // Feature routes are mounted here as modules are built, e.g.:
