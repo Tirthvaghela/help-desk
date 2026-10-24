@@ -1,13 +1,13 @@
 # Help Desk API Contract
 
-> **Status: PROPOSAL (draft v0.1).** Except for `GET /api/health`, **none of the endpoints below are implemented yet.**
+> **Status: PROPOSAL (draft v0.2).** Except for `GET /api/health`, **none of the endpoints below are implemented yet.**
 > This document is the agreement the backend and frontend build against. Change it through a pull request so everyone sees the change, and update the **Status** column when an endpoint is merged into `main`.
 
 Source: project brief *Help Desk — Customer Support Ticket System* v0.2 (Sections 2, 4, 5 and 8). Where the brief leaves a choice open, this document says so.
 
 ## Contents
 
-1. [Open decisions](#1-open-decisions)
+1. [Decisions](#1-decisions)
 2. [Conventions](#2-conventions)
 3. [Data shapes](#3-data-shapes)
 4. [Endpoint summary](#4-endpoint-summary)
@@ -23,11 +23,17 @@ Source: project brief *Help Desk — Customer Support Ticket System* v0.2 (Secti
 
 ---
 
-## 1. Open decisions
+## 1. Decisions
 
-These must be agreed by the team before the related code is written. **Do not implement either option until it is marked DECIDED here.**
+These must be agreed by the team before the related code is written. **Do not implement an option until it is marked DECIDED here.**
 
-### OPEN-1: Agent access policy
+| ID | Topic | State |
+| --- | --- | --- |
+| OPEN-1 | Agent access policy | **OPEN** |
+| OPEN-2 | How the auth token is sent | **DECIDED** (2026-10-24): JWT Bearer token in the `Authorization` header |
+| C-1 … C-7 | Smaller points | **OPEN** (proposals only) |
+
+### OPEN-1: Agent access policy — OPEN
 
 Which tickets can an agent see and act on?
 
@@ -40,16 +46,19 @@ Whichever is chosen, the backend applies it **in the database query** (for lists
 
 Related question under option (b): may an agent assign a ticket to a *different* agent, or only to themselves?
 
-### OPEN-2: How the auth token is sent
+### OPEN-2: How the auth token is sent — DECIDED
 
-| Option | How it works | Trade-offs |
-| --- | --- | --- |
-| **(A) Bearer token** | Login/register return `token` in the JSON body. The frontend stores it and sends `Authorization: Bearer <token>` on every request. | Simplest; works across different frontend/backend domains. Token in `localStorage` is readable by injected scripts (XSS). |
-| **(B) httpOnly cookie** | Login/register set a `Secure; HttpOnly; SameSite` cookie. The body does not contain the token. Adds `POST /api/auth/logout` to clear the cookie. | Token not readable by JavaScript. Needs `credentials: 'include'`, CORS `credentials: true`, and careful `SameSite` settings when frontend and backend are on different domains. |
+**Decision (2026-10-24):** Option (A), **JWT Bearer token**. Confirmed by Swati (authentication owner).
 
-The examples in this document show option **(A)** because it is what the brief describes ("log in and receive a token"). If (B) is chosen, only the auth section and the request headers change; all other request/response bodies stay the same.
+- `POST /api/auth/register` and `POST /api/auth/login` return the JWT in the JSON response body as `token`.
+- The frontend sends it on every protected request as `Authorization: Bearer <token>`.
+- The API does not set or read authentication cookies. CORS does not need `credentials`.
 
-### Smaller points to confirm
+Option (B), an httpOnly cookie, was not chosen.
+
+**Not covered by this decision** (still open, see the table below): token lifetime (C-3), where the frontend keeps the token (C-6), and logout behaviour (C-7).
+
+### Smaller points to confirm (all OPEN)
 
 | # | Question | Proposal in this document |
 | --- | --- | --- |
@@ -58,6 +67,8 @@ The examples in this document show option **(A)** because it is what the brief d
 | C-3 | Token lifetime | 1 day (`JWT_EXPIRES_IN=1d`). No refresh tokens. |
 | C-4 | Is `category` a reference to the Category collection or a fixed list? | Reference to an active Category (admins manage categories, per the brief). |
 | C-5 | Who can be an assignee? | Active users with role `agent` or `admin`. |
+| C-6 | Where does the frontend keep the token (e.g. `localStorage`, `sessionStorage`, memory)? | No proposal yet. Affects whether a session survives a page reload or a closed tab. |
+| C-7 | Logout: does the client just discard the token, or does the server also need a logout/revocation endpoint? | Client discards the token; no server endpoint. |
 
 ---
 
@@ -72,7 +83,7 @@ The examples in this document show option **(A)** because it is what the brief d
 ### Requests
 
 - JSON bodies with `Content-Type: application/json`. Maximum body size: 100 kB.
-- Protected routes require authentication (see OPEN-2). Examples use `Authorization: Bearer <token>`.
+- Protected routes require the header `Authorization: Bearer <token>` (decided, see OPEN-2).
 - **Unknown fields in request bodies are ignored.** In particular, the server never accepts `role`, `status`, `ticketNumber`, `createdBy`, `isActive` or timestamps from a client except through the endpoints documented for them.
 - String inputs are trimmed before validation.
 
@@ -250,7 +261,7 @@ Public. Used by the frontend status check and by the deployment host.
 
 ## 6. Authentication
 
-> Examples assume OPEN-2 option (A), Bearer token.
+> **Transport decided (OPEN-2):** the JWT is returned as `token` in the response body and sent back as `Authorization: Bearer <token>`. The endpoints below are still **proposed, not implemented**, and token lifetime, storage and logout remain open (C-3, C-6, C-7).
 
 ### `POST /api/auth/register` — Proposed
 
@@ -307,12 +318,18 @@ Errors: **401** `UNAUTHORIZED` (no/invalid/expired token) · **403** `ACCOUNT_DI
 
 ### Token rules (all protected routes)
 
+Decided (OPEN-2):
+
+- The token is read **only** from the `Authorization` header, in the form `Bearer <token>`. A missing header or any other scheme → **401 `UNAUTHORIZED`**.
+
+Proposed (not yet confirmed):
+
 - JWT signed with `JWT_SECRET`, payload contains only the user id (`sub`). Lifetime per C-3.
 - **The role is read from the database on every request, not from the token or the client.** This means a role change or deactivation takes effect immediately.
-- Missing, malformed, expired or wrongly-signed token → **401 `UNAUTHORIZED`**.
+- Malformed, expired or wrongly-signed token → **401 `UNAUTHORIZED`**.
 - Token for a user that no longer exists → **401 `UNAUTHORIZED`**.
 - Token for a deactivated user → **403 `ACCOUNT_DISABLED`**.
-- Logout under option (A): the frontend deletes the stored token. No server call.
+- Logout: see C-7.
 
 ---
 
@@ -605,3 +622,4 @@ Modules should throw the specific code where one is listed (e.g. `ApiError.confl
 | Date | Change | By |
 | --- | --- | --- |
 | 2026-10-24 | Draft v0.1: all endpoints from the brief proposed; OPEN-1 and OPEN-2 recorded | Tirth Vaghela |
+| 2026-10-24 | v0.2: OPEN-2 DECIDED (JWT Bearer token in `Authorization` header, confirmed by Swati). OPEN-1 stays OPEN. Added C-6 (token storage) and C-7 (logout) as open points. | Tirth Vaghela |
