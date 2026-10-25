@@ -1,6 +1,6 @@
 # Help Desk API Contract
 
-> **Status: PROPOSAL (draft v0.3).** Except for `GET /api/health`, **none of the endpoints below are implemented yet.**
+> **Status: PROPOSAL (draft v0.4).** Except for `GET /api/health`, **none of the endpoints below are implemented yet.**
 > This document is the agreement the backend and frontend build against. Change it through a pull request so everyone sees the change, and update the **Status** column when an endpoint is merged into `main`.
 
 Source: project brief *Help Desk — Customer Support Ticket System* v0.2 (Sections 2, 4, 5 and 8). Where the brief leaves a choice open, this document says so.
@@ -25,13 +25,21 @@ Source: project brief *Help Desk — Customer Support Ticket System* v0.2 (Secti
 
 ## 1. Decisions
 
-These must be agreed by the team before the related code is written. **Do not implement an option until it is marked DECIDED here.**
+States used below:
+
+- **DECIDED**: confirmed by the responsible team member.
+- **DEFAULT**: an engineering default chosen by the integration lead so implementation is not blocked. It is **not** a team approval. Code may implement it, and each default is confirmed or changed when the owner reviews the pull request that implements it. Changing a default later means changing the code and its tests in the same pull request.
+- **OPEN**: no decision yet. **Do not implement an OPEN item.**
 
 | ID | Topic | State |
 | --- | --- | --- |
 | OPEN-1 | Agent access policy | **DECIDED** (2026-10-25): option (b), unassigned tickets + tickets assigned to that agent |
 | OPEN-2 | How the auth token is sent | **DECIDED** (2026-10-24): JWT Bearer token in the `Authorization` header |
-| C-1 … C-8 | Smaller points | **OPEN** (proposals only) |
+| C-1, C-4, C-5, C-8 | Replies on resolved tickets, category storage, eligible assignees, assignment permissions | **DEFAULT** (2026-10-25), see [Engineering defaults](#engineering-defaults-d1d7) |
+| D-4, D-5, D-7 | Comment model, shared ticket-access helper, owner of `GET /api/tickets/:id` | **DEFAULT** (2026-10-25), see [Engineering defaults](#engineering-defaults-d1d7) |
+| C-2, C-3, C-6, C-7 | Admin modifying self, token lifetime, token storage, logout | **OPEN** (proposals only) |
+
+> Amended 2026-10-25 (v0.4): this section previously said "Do not implement an option until it is marked DECIDED". Seven open points were blocking the whole agent-workflow module, so the DEFAULT state was added to let implementation proceed while keeping team review explicit.
 
 ### OPEN-1: Agent access policy — DECIDED
 
@@ -44,7 +52,7 @@ These must be agreed by the team before the related code is written. **Do not im
 
 Option (a), all tickets, was not chosen.
 
-**Not covered by this decision** (still open): whether an agent may assign a ticket to a *different* agent, or only to themselves (C-8), and who can be an assignee (C-5).
+**Not covered by this decision:** whether an agent may assign a ticket to a *different* agent, or only to themselves (C-8), and who can be an assignee (C-5). Both now have engineering defaults (D-1, D-2 below).
 
 ### OPEN-2: How the auth token is sent — DECIDED
 
@@ -58,18 +66,34 @@ Option (B), an httpOnly cookie, was not chosen.
 
 **Not covered by this decision** (still open, see the table below): token lifetime (C-3), where the frontend keeps the token (C-6), and logout behaviour (C-7).
 
-### Smaller points to confirm (all OPEN)
+### Smaller points
 
-| # | Question | Proposal in this document |
-| --- | --- | --- |
-| C-1 | Can replies be added to a **resolved** ticket? | Yes (no restriction). |
-| C-2 | Can an admin change their **own** role or deactivate themselves? | No: returns 400 `CANNOT_MODIFY_SELF`, to avoid locking out the only admin. |
-| C-3 | Token lifetime | 1 day (`JWT_EXPIRES_IN=1d`). No refresh tokens. |
-| C-4 | Is `category` a reference to the Category collection or a fixed list? | Reference to an active Category (admins manage categories, per the brief). |
-| C-5 | Who can be an assignee? | Active users with role `agent` or `admin`. |
-| C-6 | Where does the frontend keep the token (e.g. `localStorage`, `sessionStorage`, memory)? | No proposal yet. Affects whether a session survives a page reload or a closed tab. |
-| C-7 | Logout: does the client just discard the token, or does the server also need a logout/revocation endpoint? | Client discards the token; no server endpoint. |
-| C-8 | Under OPEN-1, may an agent assign a ticket to a *different* agent, or only to themselves? | No proposal yet. |
+| # | Question | State | Proposal / default |
+| --- | --- | --- | --- |
+| C-1 | Can replies be added to a **resolved** ticket? | **DEFAULT** (D-3) | Yes, no restriction. |
+| C-2 | Can an admin change their **own** role or deactivate themselves? | OPEN | No: returns 400 `CANNOT_MODIFY_SELF`, to avoid locking out the only admin. |
+| C-3 | Token lifetime | OPEN | 1 day (`JWT_EXPIRES_IN=1d`). No refresh tokens. The implementation reads `JWT_EXPIRES_IN` (default `1d`), so the value can change without code changes. |
+| C-4 | Is `category` a reference to the Category collection or a fixed list? | **DEFAULT** (D-6) | Reference to a Category collection. |
+| C-5 | Who can be an assignee? | **DEFAULT** (D-2) | Active users with role `agent` or `admin`. |
+| C-6 | Where does the frontend keep the token (e.g. `localStorage`, `sessionStorage`, memory)? | OPEN | No proposal yet. Affects whether a session survives a page reload or a closed tab. |
+| C-7 | Logout: does the client just discard the token, or does the server also need a logout/revocation endpoint? | OPEN | Client discards the token; no server endpoint. |
+| C-8 | Under OPEN-1, may an agent assign a ticket to a *different* agent, or only to themselves? | **DEFAULT** (D-1) | Only to themselves (claim) or to nobody (release). Admins assign anyone eligible. |
+
+### Engineering defaults (D1–D7)
+
+**State: DEFAULT (2026-10-25), chosen by Tirth Vaghela (integration lead). Not yet approved by the owners named below.** Each is implemented and covered by tests; the owner confirms or changes it when reviewing the implementing pull request.
+
+| # | Topic | Default | Rationale | Owner to confirm |
+| --- | --- | --- | --- | --- |
+| D-1 | Assignment permissions (C-8) | An **agent** may set `assignedTo` only to **themselves** (claim) or to `null` (release), on tickets they can access. Anything else → **403 `FORBIDDEN`**. An **admin** may assign any eligible user (D-2) or `null`. Agents and admins may both set `priority` on tickets they can access. | Under OPEN-1, an agent who assigns a ticket to someone else immediately loses access to it, so "assign to another agent" would let agents push work onto colleagues with no way back. Keeping cross-agent assignment with admins gives one accountable triage role. Matches the brief's flow (agent sets priority, assigns, starts work). | Ayushi |
+| D-2 | Eligible assignees (C-5) | The assignee must be an **existing** user with role `agent` or `admin` and `isActive: true`. Otherwise → **400 `VALIDATION_ERROR`** ("assignedTo must be an active agent or admin"), including for an id that matches no user (the 404 is reserved for the ticket in the URL). | Same as the existing C-5 proposal and the error already listed for `PATCH /assign`. Customers cannot work tickets; deactivated users cannot act. | Ayushi |
+| D-3 | Replies on resolved tickets (C-1) | **Allowed**, with no restriction. Posting a reply never changes the status, and a resolved ticket cannot be reopened (status only moves forward). | Keeps the existing C-1 proposal. Lets a customer confirm the fix or add details without creating a new ticket; reopening stays out of scope because the brief defines only Open → In Progress → Resolved. | Ayushi |
+| D-4 | Comment model (Q-2) | Model **`TicketComment`** (handbook collection name). JSON shape and keys stay `comment` / `comments` as in [Section 9](#9-comments-ticket-conversation). Implemented by the agent-workflow module (`backend/src/models/TicketComment.js`). Schema in `docs/DATA_MODEL.md` §3.4. | The handbook names the collection; the API shape is unchanged. The comments API is in this module, so the model is too: one owner, no duplicate. | Ayushi, Swati |
+| D-5 | Shared ticket access | **One helper**, `backend/src/utils/ticketAccess.js`, owned by the agent-workflow module and used by **every** ticket and comment route, including Swati's. Customer: `createdBy` is the user. Agent: OPEN-1 (unassigned or assigned to them). Admin: all. Any other role: no access. Single-ticket checks run in the contract's order: 400 `INVALID_ID`, then 404, then 403. List and update queries use the same rule as a database filter. | One rule in one file means lists, details, updates and comments cannot disagree. The agent rule is this module's decision (OPEN-1). | Swati, Ayushi |
+| D-6 | Category storage (C-4, Q-1) | **Database collection** `Category` `{ name, isActive }` with a case-insensitive unique name. Tickets reference it. Inactive categories stay on existing tickets, still appear in ticket details and statistics, and can still be used as a queue filter. They cannot be chosen for **new** tickets (enforced by ticket creation). | The handbook requires admins to manage categories; a fixed list would need a code change for every new category. References keep statistics and filters consistent. | Swati |
+| D-7 | Owner of `GET /api/tickets/:id` | The **agent-workflow module** owns it (`backend/src/routes/agentTicket.routes.js`). It is the one detail route for customers, agents and admins, authorized by `ticketAccess.js` (D-5). Swati's ticket router keeps `POST /api/tickets` and `GET /api/tickets/my` and **must not** register `GET /:id`. | The route is pure access control plus a read, and access control lives in this module (D-5). One owner prevents two competing registrations. | Swati, Ayushi |
+
+**Router mounting (with D-7):** both ticket routers are mounted at `/api/tickets` in `backend/src/app.js`, **Swati's first**, so that `GET /my` is matched before the agent-workflow router's `GET /:id` (otherwise `my` would be read as an id and return 400 `INVALID_ID`). Admin routes: Swati's `/api/admin/users` and `/api/admin/categories` routers, and the agent-workflow `/api/admin/stats` router, mounted at `/api/admin` with no overlapping paths.
 
 ---
 
@@ -222,7 +246,7 @@ In **list** responses, tickets omit `description` and `statusHistory` to keep pa
 | POST | `/api/tickets` | Customer | Swatismita | Proposed |
 | GET | `/api/tickets/my` | Customer | Swatismita | Proposed |
 | GET | `/api/tickets` | Agent\*, Admin | Ayushi | Proposed |
-| GET | `/api/tickets/:id` | Owner, Agent\*, Admin | Swatismita (ownership) / Ayushi (agent access) | Proposed |
+| GET | `/api/tickets/:id` | Owner, Agent\*, Admin | Ayushi (D-7, DEFAULT) | Proposed |
 | PATCH | `/api/tickets/:id/assign` | Agent\*, Admin | Ayushi | Proposed |
 | PATCH | `/api/tickets/:id/status` | Agent\*, Admin | Ayushi | Proposed |
 | GET | `/api/tickets/:id/comments` | Owner, Agent\*, Admin | Ayushi | Proposed |
@@ -430,12 +454,14 @@ Request:
 
 | Field | Rules |
 | --- | --- |
-| `assignedTo` | Optional. User id of an **active** `agent` or `admin` (C-5), or `null` to unassign. Whether an agent may set this to someone other than themselves is open (C-8). |
+| `assignedTo` | Optional. User id of an **active** `agent` or `admin` (D-2), or `null` to unassign. **Agents** may only set their own id or `null`; any other id → 403 (D-1). **Admins** may set any eligible user. |
 | `priority` | Optional. `low`, `medium` or `high`. |
 
 **200**: `{ "ticket": { …Ticket } }`
 
-Errors: **400** `VALIDATION_ERROR` (no fields, bad priority, assignee not an active agent/admin) · **400** `INVALID_ID` · **401** · **403** · **404**.
+Errors: **400** `VALIDATION_ERROR` (no fields, bad priority, assignee not an active agent/admin) · **400** `INVALID_ID` (ticket id or `assignedTo`) · **401** · **403** (outside the access rule, or an agent assigning someone other than themselves) · **404**.
+
+Fields other than `assignedTo` and `priority` are ignored (Section 2).
 
 ### `PATCH /api/tickets/:id/status` — Proposed
 
@@ -498,7 +524,7 @@ Request:
 | --- | --- |
 | `message` | Required string, 1–2000 characters after trimming |
 
-The server sets `author` (from the token), `ticket` and `createdAt`. Posting a comment does **not** change the ticket status. Resolved tickets: see C-1.
+The server sets `author` (from the token), `ticket` and `createdAt`. Posting a comment does **not** change the ticket status. Replies are allowed on resolved tickets (D-3).
 
 **201**: `{ "comment": { …Comment } }`
 
@@ -625,3 +651,4 @@ Modules should throw the specific code where one is listed (e.g. `ApiError.confl
 | 2026-10-24 | Draft v0.1: all endpoints from the brief proposed; OPEN-1 and OPEN-2 recorded | Tirth Vaghela |
 | 2026-10-24 | v0.2: OPEN-2 DECIDED (JWT Bearer token in `Authorization` header, confirmed by Swati). OPEN-1 stays OPEN. Added C-6 (token storage) and C-7 (logout) as open points. | Tirth Vaghela |
 | 2026-10-25 | v0.3: OPEN-1 DECIDED (option (b): unassigned tickets + tickets assigned to that agent, confirmed by Ayushi). OPEN-2 unchanged. Added C-8 (may an agent assign to another agent) as an open point. | Tirth Vaghela |
+| 2026-10-25 | v0.4: added the DEFAULT state and amended the "do not implement until DECIDED" rule. Engineering defaults D-1 to D-7 (C-1, C-4, C-5, C-8, comment model, shared access helper, owner of `GET /api/tickets/:id`) and the router mounting order. Pending review by Ayushi and Swati. C-2, C-3, C-6, C-7 stay OPEN. | Tirth Vaghela |
