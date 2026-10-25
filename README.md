@@ -46,7 +46,7 @@ Ticket lifecycle: **Open → In Progress → Resolved**, with a timestamped repl
 | Consistent JSON error format, error helpers, validation helpers | ✅ Implemented |
 | Backend test setup (`npm test`) with an isolated test database | ✅ Implemented |
 | Frontend skeleton (React Router, Tailwind, API client, status page) | ✅ Implemented |
-| API contract for all features | 📝 Proposed in [docs/API_CONTRACT.md](docs/API_CONTRACT.md); two decisions still open |
+| API contract for all features | 📝 Proposed in [docs/API_CONTRACT.md](docs/API_CONTRACT.md); auth transport (Bearer token) and agent access policy decided; smaller points still open |
 | Signup, login, roles, JWT | ⏳ Planned |
 | Ticket creation and customer ticket history | ⏳ Planned |
 | Agent queue, filters, assignment, status changes | ⏳ Planned |
@@ -244,7 +244,14 @@ if (!canView) throw ApiError.forbidden();                                       
 
 Express 5 forwards errors thrown in `async` route handlers automatically, so no `try/catch` or wrapper is needed. Mongoose validation errors, invalid ObjectIds and duplicate keys are converted to 400, 400 and 409 automatically.
 
-**Open decisions** (see the contract, Section 1): which tickets agents can access, and whether the login token is sent as a Bearer header or an httpOnly cookie.
+**Decided** (see the contract, Section 1):
+
+- **Authentication (OPEN-2):** login and register will return a JWT, which the frontend sends as `Authorization: Bearer <token>` on protected requests.
+- **Agent access (OPEN-1):** an agent can access tickets that are unassigned or assigned to them. The backend enforces this in its queries and on every single-ticket request.
+
+Neither is implemented yet.
+
+**Still open:** smaller points such as token lifetime, where the frontend keeps the token, logout behaviour, and whether an agent may assign a ticket to another agent.
 
 ## Troubleshooting
 
@@ -274,7 +281,7 @@ Express 5 forwards errors thrown in `async` route handlers automatically, so no 
 
 ## Roadmap
 
-1. Planning and API agreement (**in progress**: contract drafted, decisions open)
+1. Planning and API agreement (**in progress**: contract drafted, auth transport and agent access policy decided, smaller points open)
 2. Project setup: skeletons, DB connection, `.env.example`, `/api/health`, test setup (**done**)
 3. Parallel modules: auth, tickets, agent workflow, conversations, admin, UI screens
 4. Integration: run the HD-104 scenario end to end in the UI
