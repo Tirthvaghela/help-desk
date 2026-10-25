@@ -161,6 +161,7 @@ Never commit `.env`. Only the `.env.example` files, which contain dummy values, 
 | `PORT` | No (default 4000) | API port | `4000` |
 | `MONGODB_URI` | Yes | MongoDB connection string | `mongodb://127.0.0.1:27017/helpdesk` |
 | `JWT_SECRET` | Yes | Secret for signing login tokens | long random string |
+| `JWT_EXPIRES_IN` | No (default `1d`) | Login token lifetime (contract C-3, still open) | `1d`, `12h` |
 | `CLIENT_URL` | Yes | Frontend origin allowed by CORS | `http://localhost:5173` |
 | `MONGODB_URI_TEST` | No | Test database for `npm test`. Name must end in `_test`. | `mongodb://127.0.0.1:27017/helpdesk_test` (default) |
 

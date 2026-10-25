@@ -15,6 +15,8 @@ export const env = {
   port: Number(process.env.PORT) || 4000,
   mongodbUri: process.env.MONGODB_URI,
   jwtSecret: process.env.JWT_SECRET,
+  // Token lifetime (contract C-3, still open); any value jsonwebtoken accepts, e.g. "1d", "12h".
+  jwtExpiresIn: process.env.JWT_EXPIRES_IN || '1d',
   clientUrl: process.env.CLIENT_URL,
   nodeEnv: process.env.NODE_ENV || 'development',
 };

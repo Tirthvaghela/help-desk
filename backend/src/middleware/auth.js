@@ -1,0 +1,57 @@
+import mongoose from 'mongoose';
+import { User, USER_ROLES } from '../models/User.js';
+import { ApiError } from '../utils/ApiError.js';
+import { verifyToken } from '../utils/token.js';
+
+// Contract §6 token rules. Owner: Swati (first implementation by the integration lead).
+
+const BEARER_PATTERN = /^Bearer\s+(\S+)$/i;
+
+// Requires `Authorization: Bearer <token>`, verifies it, and loads the current user from
+// the database into req.user. Missing, invalid or expired tokens and tokens for users that
+// no longer exist get 401; deactivated accounts get 403 ACCOUNT_DISABLED.
+export async function requireAuth(req, res, next) {
+  const match = BEARER_PATTERN.exec(req.get('Authorization') ?? '');
+  if (!match) {
+    throw ApiError.unauthorized();
+  }
+
+  let payload;
+  try {
+    payload = verifyToken(match[1]);
+  } catch {
+    throw ApiError.unauthorized('Invalid or expired token');
+  }
+  if (typeof payload.sub !== 'string' || !mongoose.isObjectIdOrHexString(payload.sub)) {
+    throw ApiError.unauthorized('Invalid or expired token');
+  }
+
+  const user = await User.findById(payload.sub);
+  if (!user) {
+    throw ApiError.unauthorized('Invalid or expired token');
+  }
+  if (!user.isActive) {
+    throw ApiError.forbidden('This account has been deactivated', 'ACCOUNT_DISABLED');
+  }
+
+  req.user = user;
+  next();
+}
+
+// Allows only the given roles. Use after requireAuth.
+export function requireRole(...roles) {
+  const unknown = roles.filter((role) => !USER_ROLES.includes(role));
+  if (roles.length === 0 || unknown.length > 0) {
+    throw new Error(`requireRole needs known roles, got: ${roles.join(', ') || '(none)'}`);
+  }
+
+  return (req, res, next) => {
+    if (!req.user) {
+      throw ApiError.unauthorized();
+    }
+    if (!roles.includes(req.user.role)) {
+      throw ApiError.forbidden();
+    }
+    next();
+  };
+}

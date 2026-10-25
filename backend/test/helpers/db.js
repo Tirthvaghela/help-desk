@@ -41,6 +41,13 @@ export async function clearTestDB() {
   await mongoose.connection.dropDatabase();
 }
 
+// Clears the database and rebuilds the indexes of every registered model, so tests that
+// rely on unique indexes behave the same as in production.
+export async function resetTestDB() {
+  await clearTestDB();
+  await Promise.all(Object.values(mongoose.models).map((model) => model.createIndexes()));
+}
+
 export async function disconnectTestDB() {
   await mongoose.disconnect();
 }

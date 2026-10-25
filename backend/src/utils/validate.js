@@ -24,7 +24,7 @@ export function requireOneOf(value, allowed, field) {
   return value;
 }
 
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+export const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export function requireEmail(value, field = 'email') {
   const email = requireString(value, field, { max: 254 }).toLowerCase();
