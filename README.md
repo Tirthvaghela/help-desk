@@ -1,5 +1,7 @@
 # Help Desk — Customer Support Ticket System
 
+[![CI](https://github.com/Tirthvaghela/help-desk/actions/workflows/ci.yml/badge.svg)](https://github.com/Tirthvaghela/help-desk/actions/workflows/ci.yml)
+
 WeIntern Minor Project · Project 01 / Team 01 · MERN
 
 A web application where customers raise support tickets, support agents triage, reply to and resolve them, and administrators manage users, categories and ticket volume.
