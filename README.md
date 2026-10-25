@@ -19,6 +19,7 @@ Ticket lifecycle: **Open → In Progress → Resolved**, with a timestamped repl
 - [Environment variables](#environment-variables)
 - [Scripts](#scripts)
 - [Testing](#testing)
+- [Continuous integration](#continuous-integration)
 - [API](#api)
 - [Troubleshooting](#troubleshooting)
 - [Git workflow](#git-workflow)
@@ -96,6 +97,8 @@ help-desk/
 │   ├── index.html
 │   ├── vite.config.js
 │   └── package.json
+├── .github/
+│   └── workflows/ci.yml   GitHub Actions: backend tests + frontend build
 ├── docs/
 │   └── API_CONTRACT.md    Proposed endpoints, request/response shapes, error codes
 ├── .gitattributes
@@ -200,10 +203,11 @@ What the tests cover today:
 - `test/health.test.js`: `/api/health` with and without a database, CORS, and the JSON 404 for unknown routes
 - `test/errors.test.js`: error helpers and the error middleware (ApiError, async errors, 500 without leaking details, bad JSON, oversized body, Mongoose validation/cast/duplicate errors)
 - `test/validate.test.js`: validation helpers
+- `test/db-helpers.test.js`: the test-database helpers (strict mode, `_test` name guard, no credentials in error messages)
 
 **Your development data is safe.** `npm test` always uses `MONGODB_URI_TEST` (default `mongodb://127.0.0.1:27017/helpdesk_test`) and ignores `MONGODB_URI` in your `.env`. The helpers in `test/helpers/db.js` refuse to connect to or clear any database whose name does not end in `_test`.
 
-Most tests do not need MongoDB. Tests that do need it are **skipped** (shown as `# SKIP` with a reason) if MongoDB is not running.
+Most tests do not need MongoDB. Tests that do need it are **skipped** (shown as `# SKIP` with a reason) if MongoDB is not running. Set `REQUIRE_TEST_DB=1` to make them **fail** instead; CI always does this.
 
 **Writing tests for a new module:**
 
@@ -213,6 +217,31 @@ Most tests do not need MongoDB. Tests that do need it are **skipped** (shown as 
 - Test files run one at a time, so they never clear each other's data.
 
 The frontend has no automated tests yet. Use `npm run build` to check it compiles.
+
+## Continuous integration
+
+GitHub Actions ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs on every pull request into `main` and on every push to `main`. A newer push to the same pull request or branch cancels the older run.
+
+| Job | What it checks |
+| --- | --- |
+| **Backend tests** | Node 22 with a MongoDB 7 service. Runs `npm ci` and `npm test` in `backend/` with `REQUIRE_TEST_DB=1`, so database tests must run: if MongoDB is unreachable, the job fails instead of skipping them. |
+| **Frontend build** | Node 22. Runs `npm ci` and `npm run build` in `frontend/`. |
+
+Only merge a pull request when both jobs pass.
+
+Run the same checks locally before opening a pull request (MongoDB must be running):
+
+```bash
+# Backend (same settings as CI)
+cd backend
+npm ci
+REQUIRE_TEST_DB=1 npm test                 # PowerShell: $env:REQUIRE_TEST_DB='1'; npm test
+
+# Frontend
+cd ../frontend
+npm ci
+npm run build
+```
 
 ## API
 

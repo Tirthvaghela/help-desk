@@ -12,10 +12,18 @@ function assertTestDatabase() {
 }
 
 // Returns true when connected, false when MongoDB is not reachable.
+// With REQUIRE_TEST_DB=1 (set in CI), an unreachable database throws instead,
+// so database tests fail rather than being skipped.
 export async function connectTestDB() {
   try {
     await mongoose.connect(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 2000 });
-  } catch {
+  } catch (err) {
+    await mongoose.disconnect();
+    if (process.env.REQUIRE_TEST_DB === '1') {
+      // Mask any username/password so they never appear in test output or CI logs.
+      const uri = process.env.MONGODB_URI.replace(/\/\/[^@/]+@/, '//***@');
+      throw new Error(`REQUIRE_TEST_DB=1 but the test database is not reachable at ${uri}: ${err.message}`);
+    }
     return false;
   }
   try {
