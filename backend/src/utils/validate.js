@@ -3,6 +3,15 @@ import { ApiError } from './ApiError.js';
 // Small server-side validation helpers. Each one throws a 400 VALIDATION_ERROR
 // with a clear message, or returns the cleaned value.
 
+// Express 5 leaves req.body undefined when no JSON body was sent, so check it before
+// reading fields; otherwise `req.body.x` throws and the client gets a 500.
+export function requireJsonBody(body) {
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+    throw ApiError.badRequest('Request body must be a JSON object');
+  }
+  return body;
+}
+
 export function requireString(value, field, { min = 1, max = Infinity } = {}) {
   if (typeof value !== 'string' || value.trim() === '') {
     throw ApiError.badRequest(`${field} is required`);

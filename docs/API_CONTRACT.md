@@ -1,6 +1,6 @@
 # Help Desk API Contract
 
-> **Status: PROPOSAL (draft v0.4).** Except for `GET /api/health`, **none of the endpoints below are implemented yet.**
+> **Status: PROPOSAL (draft v0.5).** Except for `GET /api/health`, **none of the endpoints below are implemented yet.**
 > This document is the agreement the backend and frontend build against. Change it through a pull request so everyone sees the change, and update the **Status** column when an endpoint is merged into `main`.
 
 Source: project brief *Help Desk — Customer Support Ticket System* v0.2 (Sections 2, 4, 5 and 8). Where the brief leaves a choice open, this document says so.
@@ -302,7 +302,7 @@ Request:
 | --- | --- |
 | `name` | Required string, 2–80 characters after trimming |
 | `email` | Required, valid email, stored lower-cased, unique |
-| `password` | Required string, 8–72 characters (72 is bcrypt's input limit) |
+| `password` | Required string, at least 8 characters and **at most 72 bytes** in UTF-8 (bcrypt's input limit; characters such as `€` take 3 bytes). Longer passwords are rejected, never shortened. Leading and trailing spaces are trimmed (existing behaviour, kept so existing accounts still match). |
 | `role` | **Ignored if sent.** The server always sets `role: "customer"`. |
 
 **201**:
@@ -311,7 +311,7 @@ Request:
 { "user": { "id": "…", "name": "Asha Customer", "email": "asha@example.com", "role": "customer", "isActive": true, "createdAt": "…" }, "token": "<jwt>" }
 ```
 
-Errors: **400** `VALIDATION_ERROR` · **409** `EMAIL_TAKEN` ("Email is already registered").
+Errors: **400** `VALIDATION_ERROR` (including a missing or non-object JSON body) · **400** `INVALID_JSON` · **409** `EMAIL_TAKEN` ("Email is already registered").
 
 ### `POST /api/auth/login` — Proposed
 
@@ -330,8 +330,10 @@ Errors:
 | Status | Code | When |
 | --- | --- | --- |
 | 400 | `VALIDATION_ERROR` | Email or password missing |
-| 401 | `INVALID_CREDENTIALS` | Unknown email **or** wrong password. Same message for both ("Invalid email or password") so attackers cannot discover which emails exist. |
-| 403 | `ACCOUNT_DISABLED` | Correct credentials but `isActive` is `false` |
+| 401 | `INVALID_CREDENTIALS` | Unknown email, wrong password, **or a deactivated account with a wrong password**. Identical response in every case ("Invalid email or password"), and a password check runs even for unknown emails, so neither the response nor its timing reveals which emails exist. |
+| 403 | `ACCOUNT_DISABLED` | Correct password but `isActive` is `false`. Only returned **after** the password is verified. |
+
+Login accepts passwords up to 128 characters (the registration limit before the 72-byte rule), so accounts created earlier can still sign in. A missing or non-object JSON body gives **400** `VALIDATION_ERROR`.
 
 ### `GET /api/auth/me` — Proposed
 
@@ -652,3 +654,4 @@ Modules should throw the specific code where one is listed (e.g. `ApiError.confl
 | 2026-10-24 | v0.2: OPEN-2 DECIDED (JWT Bearer token in `Authorization` header, confirmed by Swati). OPEN-1 stays OPEN. Added C-6 (token storage) and C-7 (logout) as open points. | Tirth Vaghela |
 | 2026-10-25 | v0.3: OPEN-1 DECIDED (option (b): unassigned tickets + tickets assigned to that agent, confirmed by Ayushi). OPEN-2 unchanged. Added C-8 (may an agent assign to another agent) as an open point. | Tirth Vaghela |
 | 2026-10-25 | v0.4: added the DEFAULT state and amended the "do not implement until DECIDED" rule. Engineering defaults D-1 to D-7 (C-1, C-4, C-5, C-8, comment model, shared access helper, owner of `GET /api/tickets/:id`) and the router mounting order. Pending review by Ayushi and Swati. C-2, C-3, C-6, C-7 stay OPEN. | Tirth Vaghela |
+| 2026-10-26 | v0.5: §6 auth: password limit is 72 **bytes** (rejected, not shortened); login never reveals unknown or deactivated accounts before the password is verified; missing/non-object bodies give 400. Responses follow §6 (`{ user, token }`, 409 `EMAIL_TAKEN`, 401 `INVALID_CREDENTIALS`); `GET /api/auth/me` implemented. | Tirth Vaghela |
