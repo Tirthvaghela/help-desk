@@ -1,5 +1,16 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router";
+import { useAuth } from "../../auth/useAuth.js";
+
+// Up to two initials from a name, e.g. "Asha Customer" → "AC".
+function initialsOf(name = "") {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0].toUpperCase())
+    .join("");
+}
 
 export default function HelpDeskHeader({
   role = "agent",
@@ -7,6 +18,7 @@ export default function HelpDeskHeader({
   onNavigate,
 }) {
   const navigate = useNavigate();
+  const { user, logout } = useAuth();
 
   const [showProfile, setShowProfile] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
@@ -51,7 +63,7 @@ export default function HelpDeskHeader({
   // ==============================
 
   const handleSignOut = () => {
-    sessionStorage.removeItem("helpdesk_staff_role");
+    logout();
 
     setShowProfile(false);
     setShowNotifications(false);
@@ -216,19 +228,17 @@ export default function HelpDeskHeader({
             }}
             className="flex h-10 w-10 items-center justify-center rounded-full border border-white/50 bg-[#c6f0d9] text-[12px] font-semibold text-[#155d45] transition hover:bg-[#b2e9cc] sm:h-11 sm:w-11 sm:text-[13px]"
           >
-            {isAdmin ? "AM" : "SK"}
+            {initialsOf(user?.name) || "?"}
           </button>
 
           {showProfile && (
             <div className="absolute right-0 top-12 z-50 w-[min(256px,calc(100vw-48px))] rounded-[20px] border border-white/80 bg-white/95 p-5 shadow-xl backdrop-blur-xl sm:top-14 sm:w-64">
               <p className="font-semibold text-[#1c302b]">
-                {isAdmin ? "Aarohi Mehta" : "Shwetaleena Kundu"}
+                {user?.name}
               </p>
 
-              <p className="mt-1 text-xs text-[#687c75]">
-                {isAdmin
-                  ? "aarohi@helpdesk.team"
-                  : "Agent · Support Team"}
+              <p className="mt-1 break-all text-xs text-[#687c75]">
+                {user?.email}
               </p>
 
               <span className="mt-3 inline-block rounded-full bg-[#e2f5e9] px-3 py-1 text-xs font-semibold text-[#17694c]">

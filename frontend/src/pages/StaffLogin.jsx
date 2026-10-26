@@ -1,17 +1,43 @@
 import { useState } from "react";
-import { useNavigate } from "react-router";
+import { Navigate, useNavigate } from "react-router";
+import { useAuth } from "../auth/useAuth.js";
+import { dashboardPathFor, STAFF_ONLY_MESSAGE, STAFF_ROLES } from "../auth/session.js";
+
+// Turns a failed login into a message that is safe to show: backend messages for known
+// errors (contract §6), a generic one for anything else.
+function loginErrorMessage(error) {
+  switch (error.code) {
+    case "INVALID_CREDENTIALS":
+      return "Invalid email or password.";
+    case "ACCOUNT_DISABLED":
+      return "This account has been deactivated. Contact an administrator.";
+    case "ROLE_NOT_ALLOWED":
+      return STAFF_ONLY_MESSAGE;
+    case "VALIDATION_ERROR":
+    case "NETWORK_ERROR":
+    case "TOKEN_STORAGE_FAILED":
+      return error.message;
+    default:
+      return "Sign-in failed. Please try again.";
+  }
+}
 
 export default function StaffLogin() {
   const navigate = useNavigate();
+  const { status, user, notice, login } = useAuth();
 
+  // The workspace toggle is only a visual choice; where the user lands is decided by the
+  // role the backend returns.
   const [role, setRole] = useState("agent");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
-  const handleSubmit = (event) => {
+  const handleSubmit = async (event) => {
     event.preventDefault();
+    if (submitting) return;
     setError("");
 
     if (!email.trim() || !password.trim()) {
@@ -19,17 +45,23 @@ export default function StaffLogin() {
       return;
     }
 
-    // Temporary frontend session.
-    // Replace with real authentication after backend integration.
-    sessionStorage.setItem("helpdesk_staff_role", role);
-
-    navigate(
-      role === "admin"
-        ? "/admin/dashboard"
-        : "/agent/dashboard",
-      { replace: true }
-    );
+    setSubmitting(true);
+    try {
+      const signedIn = await login(email.trim(), password, { allowedRoles: STAFF_ROLES });
+      navigate(dashboardPathFor(signedIn.role), { replace: true });
+    } catch (loginError) {
+      setError(loginErrorMessage(loginError));
+      setSubmitting(false);
+    }
   };
+
+  // Already signed in as staff (e.g. opened the login page again): go to the dashboard.
+  const signedInDashboard = status === "authenticated" ? dashboardPathFor(user?.role) : null;
+  if (signedInDashboard && !submitting) {
+    return <Navigate to={signedInDashboard} replace />;
+  }
+
+  const shownError = error || notice;
 
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#c5e6d7] px-4 py-10 sm:px-6">
@@ -142,6 +174,7 @@ export default function StaffLogin() {
                 id="staff-email"
                 type="email"
                 required
+                disabled={submitting}
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
                 placeholder="Enter your work email"
@@ -164,6 +197,7 @@ export default function StaffLogin() {
                   id="staff-password"
                   type={showPassword ? "text" : "password"}
                   required
+                  disabled={submitting}
                   value={password}
                   onChange={(event) =>
                     setPassword(event.target.value)
@@ -186,18 +220,20 @@ export default function StaffLogin() {
             </div>
 
             {/* ERROR */}
-            {error && (
-              <p className="rounded-xl bg-red-50 px-4 py-3 text-[12px] text-red-600">
-                {error}
+            {shownError && (
+              <p role="alert" className="rounded-xl bg-red-50 px-4 py-3 text-[12px] text-red-600">
+                {shownError}
               </p>
             )}
 
             {/* SIGN IN */}
             <button
               type="submit"
-              className="w-full rounded-[14px] bg-[#168461] px-5 py-3.5 text-[13px] font-semibold text-white shadow-[0_6px_18px_rgba(22,132,97,0.15)] transition hover:bg-[#106c4e]"
+              disabled={submitting}
+              aria-busy={submitting}
+              className="w-full rounded-[14px] bg-[#168461] px-5 py-3.5 text-[13px] font-semibold text-white shadow-[0_6px_18px_rgba(22,132,97,0.15)] transition hover:bg-[#106c4e] disabled:cursor-not-allowed disabled:opacity-70"
             >
-              Sign In →
+              {submitting ? "Signing in…" : "Sign In →"}
             </button>
           </form>
 
