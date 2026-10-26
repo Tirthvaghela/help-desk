@@ -1,0 +1,838 @@
+import { useState } from "react";
+
+// ==============================
+// DEMO TICKET DATA
+// ==============================
+
+const sampleTickets = [
+  {
+    id: "HD-104",
+    subject: "Unable to reset password",
+    customer: "Asha Customer",
+    email: "asha.customer@example.com",
+    initials: "AC",
+    category: "Account & Login",
+    priority: "medium",
+    status: "in_progress",
+    assignedTo: "You",
+    time: "10:42 AM",
+    createdAt: "Oct 25, 2026 · 10:42 AM",
+    messages: [
+      {
+        id: 1,
+        sender: "Asha Customer",
+        role: "customer",
+        message:
+          "Hello, I've been trying to reset my password, but the link keeps showing as expired.",
+        time: "10:42 AM",
+      },
+      {
+        id: 2,
+        sender: "You",
+        role: "agent",
+        message:
+          "Hi Asha! I'll help you with that. Could you confirm whether you're using the latest reset email?",
+        time: "10:48 AM",
+      },
+      {
+        id: 3,
+        sender: "Asha Customer",
+        role: "customer",
+        message:
+          "Yes, I requested another link, but I'm still facing the same issue.",
+        time: "10:51 AM",
+      },
+    ],
+  },
+  {
+    id: "HD-105",
+    subject: "Payment confirmation not received",
+    customer: "Riya Sharma",
+    email: "riya.sharma@example.com",
+    initials: "RS",
+    category: "Billing",
+    priority: "high",
+    status: "open",
+    assignedTo: "You",
+    time: "09:35 AM",
+    createdAt: "Oct 25, 2026 · 09:35 AM",
+    messages: [
+      {
+        id: 1,
+        sender: "Riya Sharma",
+        role: "customer",
+        message:
+          "I completed my payment, but I haven't received a confirmation email.",
+        time: "09:35 AM",
+      },
+    ],
+  },
+  {
+    id: "HD-106",
+    subject: "Account details need updating",
+    customer: "Arjun Patel",
+    email: "arjun.patel@example.com",
+    initials: "AP",
+    category: "Account & Login",
+    priority: "low",
+    status: "resolved",
+    assignedTo: "You",
+    time: "Yesterday",
+    createdAt: "Oct 24, 2026",
+    messages: [
+      {
+        id: 1,
+        sender: "Arjun Patel",
+        role: "customer",
+        message: "I need help updating my account details.",
+        time: "Yesterday",
+      },
+      {
+        id: 2,
+        sender: "You",
+        role: "agent",
+        message:
+          "Your account information has been updated successfully.",
+        time: "Yesterday",
+      },
+    ],
+  },
+  {
+    id: "HD-107",
+    subject: "Unable to access dashboard",
+    customer: "Neha Singh",
+    email: "neha.singh@example.com",
+    initials: "NS",
+    category: "Technical Support",
+    priority: "high",
+    status: "open",
+    assignedTo: null,
+    time: "Yesterday",
+    createdAt: "Oct 24, 2026",
+    messages: [
+      {
+        id: 1,
+        sender: "Neha Singh",
+        role: "customer",
+        message:
+          "I can log in, but my dashboard isn't loading. Could someone help?",
+        time: "Yesterday",
+      },
+    ],
+  },
+  {
+    id: "HD-108",
+    subject: "Invoice download issue",
+    customer: "Kabir Mehta",
+    email: "kabir.mehta@example.com",
+    initials: "KM",
+    category: "Billing",
+    priority: "medium",
+    status: "open",
+    assignedTo: null,
+    time: "Oct 22",
+    createdAt: "Oct 22, 2026",
+    messages: [
+      {
+        id: 1,
+        sender: "Kabir Mehta",
+        role: "customer",
+        message:
+          "I'm unable to download my invoice. The download button doesn't respond.",
+        time: "Oct 22",
+      },
+    ],
+  },
+];
+
+// ==============================
+// STYLES AND LABELS
+// ==============================
+
+const statusLabels = {
+  open: "Open",
+  in_progress: "In Progress",
+  resolved: "Resolved",
+};
+
+const statusStyles = {
+  open: "bg-[#e4efff] text-[#4b79b2]",
+  in_progress: "bg-[#fff0d9] text-[#a77836]",
+  resolved: "bg-[#def3e6] text-[#348264]",
+};
+
+const priorityStyles = {
+  high: "bg-[#ffe7e3] text-[#c45e55]",
+  medium: "bg-[#fff0da] text-[#ac7b36]",
+  low: "bg-[#e1f4e9] text-[#408267]",
+};
+
+const filters = [
+  { label: "All", value: "all" },
+  { label: "Open", value: "open" },
+  { label: "In Progress", value: "in_progress" },
+  { label: "Resolved", value: "resolved" },
+];
+
+// ==============================
+// SEARCH ICON
+// ==============================
+
+function SearchIcon() {
+  return (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="10.8" cy="10.8" r="6.8" />
+      <path d="m16 16 4.5 4.5" />
+    </svg>
+  );
+}
+
+// ==============================
+// TICKET LIST CARD
+// ==============================
+
+function TicketItem({ ticket, selected, onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`w-full rounded-[20px] border p-4 text-left transition-all duration-200 ${
+        selected
+          ? "border-[#a5d7be] bg-[#e1f4e9] shadow-[0_5px_18px_rgba(45,112,82,0.09)]"
+          : "border-white/85 bg-white/65 hover:bg-white/90"
+      }`}
+    >
+      {/* CUSTOMER AVATAR AND NAME */}
+      <div className="flex items-start gap-3">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#d7f0e3] text-[12px] font-semibold text-[#307b58]">
+          {ticket.initials}
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <h3 className="text-[13px] font-semibold text-[#243e35]">
+                {ticket.customer}
+              </h3>
+
+              <p className="mt-1 text-[11px] text-[#789084]">
+                {ticket.id}
+              </p>
+            </div>
+
+            <span className="text-[10px] text-[#8b9d94]">
+              {ticket.time}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* SUBJECT */}
+      <p className="mt-3 text-[13px] font-medium leading-relaxed text-[#354e42]">
+        {ticket.subject}
+      </p>
+
+      {/* STATUS AND PRIORITY */}
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <span
+          className={`rounded-full px-3 py-1 text-[10px] font-semibold ${
+            statusStyles[ticket.status]
+          }`}
+        >
+          {statusLabels[ticket.status]}
+        </span>
+
+        <span
+          className={`rounded-full px-3 py-1 text-[10px] font-semibold capitalize ${
+            priorityStyles[ticket.priority]
+          }`}
+        >
+          {ticket.priority}
+        </span>
+
+        {!ticket.assignedTo && (
+          <span className="rounded-full border border-[#dce8e0] bg-white/80 px-3 py-1 text-[10px] font-medium text-[#758b80]">
+            Unassigned
+          </span>
+        )}
+      </div>
+    </button>
+  );
+}
+
+// ==============================
+// CONVERSATION MESSAGE
+// ==============================
+
+function MessageBubble({ message }) {
+  const isAgent = message.role === "agent";
+
+  return (
+    <div
+      className={`flex ${
+        isAgent ? "justify-end" : "justify-start"
+      }`}
+    >
+      <div
+        className={`max-w-[90%] rounded-[20px] px-4 py-3 sm:max-w-[78%] ${
+          isAgent
+            ? "rounded-br-md bg-[#d2efdf] text-[#244f3b]"
+            : "rounded-bl-md border border-white/85 bg-white/85 text-[#354b41]"
+        }`}
+      >
+        <p className="text-[11px] font-semibold opacity-75">
+          {message.sender}
+        </p>
+
+        <p className="mt-1.5 whitespace-pre-wrap text-[13px] leading-relaxed">
+          {message.message}
+        </p>
+
+        <p className="mt-2 text-right text-[10px] opacity-55">
+          {message.time}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ==============================
+// MAIN AGENT INBOX
+// ==============================
+
+export default function AgentInbox() {
+  const [tickets, setTickets] = useState(sampleTickets);
+
+  const [selectedId, setSelectedId] = useState(sampleTickets[0].id);
+
+  const [activeFilter, setActiveFilter] = useState("all");
+  const [priorityFilter, setPriorityFilter] = useState("all");
+  const [assignedOnly, setAssignedOnly] = useState(false);
+  const [search, setSearch] = useState("");
+  const [reply, setReply] = useState("");
+
+  // ==============================
+  // UPDATE TICKET DETAILS
+  // ==============================
+
+  const updateTicket = (ticketId, field, value) => {
+    setTickets((previousTickets) =>
+      previousTickets.map((ticket) =>
+        ticket.id === ticketId
+          ? { ...ticket, [field]: value }
+          : ticket
+      )
+    );
+  };
+
+  // ==============================
+  // SEND DEMO REPLY
+  // ==============================
+
+  const handleSendReply = () => {
+    if (!selectedTicket || !reply.trim()) return;
+
+    if (selectedTicket.assignedTo !== "You") return;
+
+    const newMessage = {
+      id: Date.now(),
+      sender: "You",
+      role: "agent",
+      message: reply.trim(),
+      time: new Date().toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      }),
+    };
+
+    setTickets((previousTickets) =>
+      previousTickets.map((ticket) =>
+        ticket.id === selectedTicket.id
+          ? {
+              ...ticket,
+              messages: [...ticket.messages, newMessage],
+            }
+          : ticket
+      )
+    );
+
+    setReply("");
+  };
+
+  // ==============================
+  // FILTER TICKETS
+  // ==============================
+
+  const filteredTickets = tickets.filter((ticket) => {
+    const matchesStatus =
+      activeFilter === "all" ||
+      ticket.status === activeFilter;
+
+    const matchesPriority =
+      priorityFilter === "all" ||
+      ticket.priority === priorityFilter;
+
+    const query = search.trim().toLowerCase();
+
+    const matchesSearch =
+      ticket.subject.toLowerCase().includes(query) ||
+      ticket.id.toLowerCase().includes(query) ||
+      ticket.customer.toLowerCase().includes(query) ||
+      ticket.email.toLowerCase().includes(query);
+
+    const matchesAssignment =
+      !assignedOnly || ticket.assignedTo === "You";
+
+    return (
+      matchesStatus &&
+      matchesPriority &&
+      matchesSearch &&
+      matchesAssignment
+    );
+  });
+
+  // ==============================
+  // SELECTED TICKET
+  // ==============================
+
+  const selectedTicket =
+    filteredTickets.find(
+      (ticket) => ticket.id === selectedId
+    ) ||
+    filteredTickets[0] ||
+    null;
+
+  // ==============================
+  // STATUS COUNTS
+  // ==============================
+
+  const filterCounts = {
+    all: tickets.length,
+    open: tickets.filter(
+      (ticket) => ticket.status === "open"
+    ).length,
+    in_progress: tickets.filter(
+      (ticket) => ticket.status === "in_progress"
+    ).length,
+    resolved: tickets.filter(
+      (ticket) => ticket.status === "resolved"
+    ).length,
+  };
+
+  // ==============================
+  // HANDLE STATUS CHANGE
+  // ==============================
+
+  const handleStatusChange = (event) => {
+    if (!selectedTicket) return;
+
+    updateTicket(
+      selectedTicket.id,
+      "status",
+      event.target.value
+    );
+  };
+
+  // ==============================
+  // HANDLE PRIORITY CHANGE
+  // ==============================
+
+  const handlePriorityChange = (event) => {
+    if (!selectedTicket) return;
+
+    updateTicket(
+      selectedTicket.id,
+      "priority",
+      event.target.value
+    );
+  };
+
+  // ==============================
+  // HANDLE ASSIGNEE CHANGE
+  // ==============================
+
+  const handleAssigneeChange = (event) => {
+    if (!selectedTicket) return;
+
+    const value = event.target.value;
+
+    updateTicket(
+      selectedTicket.id,
+      "assignedTo",
+      value === "unassigned" ? null : value
+    );
+  };
+
+  return (
+    <div className="grid min-w-0 grid-cols-1 gap-4 sm:gap-5 xl:min-h-[650px] xl:grid-cols-[minmax(280px,390px)_minmax(0,1fr)]">
+
+      {/* ==========================
+          LEFT — SUPPORT INBOX
+      ========================== */}
+
+      <section className="flex min-w-0 flex-col rounded-[20px] border border-white/80 bg-white/40 p-3 shadow-[0_8px_28px_rgba(35,83,72,0.05)] backdrop-blur-xl sm:rounded-[26px] sm:p-5">
+
+        {/* HEADING */}
+        <div className="mb-5 flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-[17px] font-semibold text-[#243e35]">
+              Support Inbox
+            </h2>
+
+            <p className="mt-1 text-[12px] text-[#789084]">
+              Manage incoming requests
+            </p>
+          </div>
+
+          <span className="shrink-0 rounded-full bg-white/80 px-3 py-1.5 text-[11px] font-semibold text-[#477b65]">
+            {filteredTickets.length} Tickets
+          </span>
+        </div>
+
+        {/* SEARCH */}
+        <div className="flex items-center gap-3 rounded-[15px] border border-white/85 bg-white/75 px-4 py-3 text-[#789084]">
+          <SearchIcon />
+
+          <input
+            type="search"
+            value={search}
+            onChange={(event) =>
+              setSearch(event.target.value)
+            }
+            placeholder="Search ID, subject or customer..."
+            aria-label="Search tickets"
+            className="w-full min-w-0 bg-transparent text-[13px] text-[#263e35] outline-none placeholder:text-[#9aaba1]"
+          />
+        </div>
+
+        {/* STATUS FILTERS */}
+        <div className="mt-4 flex flex-wrap gap-2">
+          {filters.map((filter) => (
+            <button
+              key={filter.value}
+              type="button"
+              onClick={() =>
+                setActiveFilter(filter.value)
+              }
+              className={`rounded-full px-3 py-2 text-[11px] font-medium transition ${
+                activeFilter === filter.value
+                  ? "bg-[#2e8666] text-white shadow-[0_4px_12px_rgba(46,134,102,0.18)]"
+                  : "border border-white/80 bg-white/55 text-[#617b6d] hover:bg-white/85"
+              }`}
+            >
+              {filter.label}
+
+              <span className="ml-1 opacity-70">
+                {filterCounts[filter.value]}
+              </span>
+            </button>
+          ))}
+        </div>
+
+        {/* ASSIGNED TO ME */}
+        <label className="mt-4 flex w-fit cursor-pointer items-center gap-2 rounded-full border border-white/80 bg-white/60 px-3 py-2 text-[11px] font-medium text-[#527361]">
+          <input
+            type="checkbox"
+            checked={assignedOnly}
+            onChange={(event) =>
+              setAssignedOnly(event.target.checked)
+            }
+            className="accent-[#2e8666]"
+          />
+
+          Assigned to me
+        </label>
+
+        {/* PRIORITY FILTER */}
+        <div className="mt-4 flex items-center justify-between gap-3">
+          <span className="text-[12px] font-medium text-[#6d8579]">
+            Priority
+          </span>
+
+          <select
+            value={priorityFilter}
+            onChange={(event) =>
+              setPriorityFilter(event.target.value)
+            }
+            aria-label="Filter by priority"
+            className="rounded-xl border border-white/85 bg-white/75 px-3 py-2 text-[12px] text-[#395c4b] outline-none"
+          >
+            <option value="all">All Priorities</option>
+            <option value="high">High</option>
+            <option value="medium">Medium</option>
+            <option value="low">Low</option>
+          </select>
+        </div>
+
+        {/* TICKET LIST */}
+        <div className="mt-5 max-h-[380px] space-y-3 overflow-y-auto pr-1 sm:max-h-[500px] xl:max-h-[680px]">
+
+          {filteredTickets.length > 0 ? (
+            filteredTickets.map((ticket) => (
+              <TicketItem
+                key={ticket.id}
+                ticket={ticket}
+                selected={
+                  selectedTicket?.id === ticket.id
+                }
+                onClick={() => {
+                  setSelectedId(ticket.id);
+                  setReply("");
+                }}
+              />
+            ))
+          ) : (
+            <div className="rounded-[20px] border border-white/80 bg-white/60 px-5 py-12 text-center">
+              <p className="text-[14px] font-semibold text-[#375b48]">
+                No tickets found
+              </p>
+
+              <p className="mt-2 text-[12px] text-[#83988a]">
+                Try changing your search or filters.
+              </p>
+            </div>
+          )}
+        </div>
+      </section>
+
+      {/* ==========================
+          RIGHT — CONVERSATION
+      ========================== */}
+
+      <section className="flex min-h-[480px] min-w-0 flex-col overflow-hidden rounded-[20px] border border-white/85 bg-white/70 shadow-[0_8px_30px_rgba(35,83,72,0.06)] backdrop-blur-xl sm:min-h-[560px] sm:rounded-[26px] xl:min-h-[620px]">
+
+        {selectedTicket ? (
+          <>
+
+            {/* TICKET HEADER */}
+            <div className="border-b border-[#e3eee7] px-3 py-4 sm:px-6 sm:py-5">
+
+              <div className="flex flex-wrap items-start justify-between gap-3">
+
+                <div className="flex min-w-0 items-start gap-3">
+
+                  {/* CUSTOMER AVATAR */}
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#d9f0e3] text-[12px] font-bold text-[#307b58]">
+                    {selectedTicket.initials}
+                  </div>
+
+                  {/* TICKET DETAILS */}
+                  <div className="min-w-0">
+                    <h2 className="break-words text-[17px] font-semibold tracking-[-0.4px] text-[#203c30] sm:text-[19px]">
+                      {selectedTicket.subject}
+                    </h2>
+
+                    <p className="mt-1 break-words text-[11px] text-[#728b7e]">
+                      {selectedTicket.id} ·{" "}
+                      {selectedTicket.customer}
+                    </p>
+
+                    <p className="mt-1 break-all text-[11px] text-[#728b7e]">
+                      {selectedTicket.email}
+                    </p>
+                  </div>
+                </div>
+
+                {/* BADGES */}
+                <div className="flex flex-wrap gap-2">
+                  <span
+                    className={`rounded-full px-3 py-1.5 text-[11px] font-semibold capitalize ${
+                      priorityStyles[selectedTicket.priority]
+                    }`}
+                  >
+                    {selectedTicket.priority}
+                  </span>
+
+                  <span
+                    className={`rounded-full px-3 py-1.5 text-[11px] font-semibold ${
+                      statusStyles[selectedTicket.status]
+                    }`}
+                  >
+                    {statusLabels[selectedTicket.status]}
+                  </span>
+                </div>
+              </div>
+
+              {/* ==========================
+                  MANAGEMENT CONTROLS
+              ========================== */}
+
+              <div className="mt-4 grid grid-cols-1 gap-3 border-t border-[#e3eee7] pt-4 sm:grid-cols-3">
+
+                {/* STATUS */}
+                <label className="min-w-0 text-[11px] font-semibold text-[#60796e]">
+                  Status
+
+                  <select
+                    value={selectedTicket.status}
+                    onChange={handleStatusChange}
+                    className="mt-1.5 w-full cursor-pointer rounded-xl border border-white/90 bg-white/75 px-3 py-2.5 text-[12px] font-medium text-[#355647] outline-none transition focus:border-[#83c6a0] focus:ring-2 focus:ring-[#83c6a0]/30"
+                  >
+                    <option value="open">Open</option>
+                    <option value="in_progress">
+                      In Progress
+                    </option>
+                    <option value="resolved">
+                      Resolved
+                    </option>
+                  </select>
+                </label>
+
+                {/* PRIORITY */}
+                <label className="min-w-0 text-[11px] font-semibold text-[#60796e]">
+                  Priority
+
+                  <select
+                    value={selectedTicket.priority}
+                    onChange={handlePriorityChange}
+                    className="mt-1.5 w-full cursor-pointer rounded-xl border border-white/90 bg-white/75 px-3 py-2.5 text-[12px] font-medium text-[#355647] outline-none transition focus:border-[#83c6a0] focus:ring-2 focus:ring-[#83c6a0]/30"
+                  >
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                  </select>
+                </label>
+
+                {/* ASSIGNEE */}
+                <label className="min-w-0 text-[11px] font-semibold text-[#60796e]">
+                  Assignee
+
+                  <select
+                    value={
+                      selectedTicket.assignedTo ||
+                      "unassigned"
+                    }
+                    onChange={handleAssigneeChange}
+                    className="mt-1.5 w-full cursor-pointer rounded-xl border border-white/90 bg-white/75 px-3 py-2.5 text-[12px] font-medium text-[#355647] outline-none transition focus:border-[#83c6a0] focus:ring-2 focus:ring-[#83c6a0]/30"
+                  >
+                    <option value="unassigned">
+                      Unassigned
+                    </option>
+
+                    <option value="You">
+                      You (Agent)
+                    </option>
+                  </select>
+                </label>
+              </div>
+
+              {/* CATEGORY AND DATE */}
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[11px] text-[#779085]">
+                <span>
+                  {selectedTicket.category} · Opened{" "}
+                  {selectedTicket.createdAt}
+                </span>
+
+                {!selectedTicket.assignedTo && (
+                  <span className="rounded-full border border-[#b7dfc8] bg-[#def1e5] px-3 py-1.5 font-medium text-[#347657]">
+                    Awaiting assignment
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* ==========================
+                CONVERSATION MESSAGES
+            ========================== */}
+
+            <div className="flex-1 space-y-4 overflow-y-auto bg-white/20 px-3 py-5 sm:px-6 sm:py-6">
+
+              <div className="mb-5 text-center">
+                <span className="rounded-full bg-white/75 px-4 py-1.5 text-[11px] text-[#81988a]">
+                  Ticket conversation
+                </span>
+              </div>
+
+              {selectedTicket.messages.map((message) => (
+                <MessageBubble
+                  key={message.id}
+                  message={message}
+                />
+              ))}
+            </div>
+
+            {/* ==========================
+                REPLY COMPOSER
+            ========================== */}
+
+            <div className="border-t border-[#e4eee7] bg-white/45 p-3 sm:p-4">
+
+              <div className="rounded-[16px] border border-[#dceae2] bg-white/80 p-2 focus-within:border-[#8ac9a6]">
+
+                <label
+                  htmlFor="agent-reply"
+                  className="sr-only"
+                >
+                  Your Reply
+                </label>
+
+                <textarea
+                  id="agent-reply"
+                  rows={2}
+                  value={reply}
+                  onChange={(event) =>
+                    setReply(event.target.value)
+                  }
+                  placeholder={`Reply to ${
+                    selectedTicket.customer.split(" ")[0]
+                  }...`}
+                  className="min-h-[68px] w-full resize-y bg-transparent px-2 py-2 text-[13px] text-[#294534] outline-none placeholder:text-[#9aaba1]"
+                />
+
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={handleSendReply}
+                    disabled={
+                      !reply.trim() ||
+                      selectedTicket.assignedTo !== "You"
+                    }
+                    title={
+                      selectedTicket.assignedTo !== "You"
+                        ? "Assign this ticket to yourself before replying"
+                        : "Send demo reply"
+                    }
+                    className="rounded-full bg-[#2e8666] px-5 py-2.5 text-[12px] font-semibold text-white transition hover:bg-[#246d52] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Send Reply →
+                  </button>
+                </div>
+              </div>
+
+              <p className="mt-2 text-[11px] text-[#8b9d93]">
+                Preview mode · Changes and replies are temporary
+                until backend integration.
+              </p>
+            </div>
+          </>
+        ) : (
+          /* NO TICKET SELECTED */
+          <div className="flex flex-1 flex-col items-center justify-center px-6 text-center">
+
+            <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-[22px] bg-[#e1f3e9] text-[26px]">
+              ✉
+            </div>
+
+            <h2 className="text-[18px] font-semibold text-[#294a38]">
+              Select a ticket
+            </h2>
+
+            <p className="mt-2 max-w-xs text-[13px] text-[#82988a]">
+              Choose a ticket from the inbox to view
+              its details and conversation.
+            </p>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
