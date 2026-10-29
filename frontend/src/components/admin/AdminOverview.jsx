@@ -1,60 +1,14 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { useApiData } from "../../api/useApiData.js";
+import { getStats, adminErrorMessage } from "../../api/admin.js";
+import { initialsOf } from "../staff/staffFormat.js";
 
-// ========================================
-// SAMPLE DATA
-// ========================================
-
-const tickets = [
-  {
-    id: "HD-1042",
-    category: "Account",
-    priority: "High",
-    status: "Open",
-    assignee: "Unassigned",
-  },
-  {
-    id: "HD-1041",
-    category: "Billing",
-    priority: "High",
-    status: "In Progress",
-    assignee: "Shwetaleena Kundu",
-  },
-  {
-    id: "HD-1040",
-    category: "Account",
-    priority: "Medium",
-    status: "Resolved",
-    assignee: "Mimansa Das",
-  },
-  {
-    id: "HD-1039",
-    category: "Technical",
-    priority: "Medium",
-    status: "Open",
-    assignee: "Unassigned",
-  },
-  {
-    id: "HD-1038",
-    category: "Account",
-    priority: "Low",
-    status: "In Progress",
-    assignee: "Shwetaleena Kundu",
-  },
-];
-
-const agents = [
-  {
-    name: "Shwetaleena Kundu",
-    initials: "SK",
-    background: "#d7f2e5",
-    color: "#246b50",
-  },
-  {
-    name: "Mimansa Das",
-    initials: "MD",
-    background: "#dcecff",
-    color: "#356a99",
-  },
+// Avatar colours for the workload list, used in turn.
+const AVATAR_COLORS = [
+  { background: "#d7f2e5", color: "#246b50" },
+  { background: "#dcecff", color: "#356a99" },
+  { background: "#fce9dd", color: "#a66b42" },
+  { background: "#e8e4ff", color: "#7563aa" },
 ];
 
 // ========================================
@@ -242,65 +196,55 @@ export default function AdminOverview({ onNavigate }) {
       ? 2
       : 1;
 
-  const total = tickets.length;
+  // Every figure comes from GET /api/admin/stats.
+  const loadStats = useCallback((token) => getStats(token), []);
+  const { status, data: stats, error, reload } = useApiData(loadStats);
 
-  const open = tickets.filter(
-    (ticket) => ticket.status === "Open"
-  ).length;
+  if (!stats) {
+    return (
+      <div style={{ ...glassStyle, padding: "22px" }}>
+        {status === "error" ? (
+          <p role="alert" style={{ fontSize: "13px", color: "#b4423b" }}>
+            {adminErrorMessage(error, "Statistics could not be loaded.")}{" "}
+            <button type="button" onClick={reload} style={{ fontWeight: 600, textDecoration: "underline" }}>
+              Try again
+            </button>
+          </p>
+        ) : (
+          <p role="status" style={{ fontSize: "13px", color: "#647b72" }}>
+            Loading statistics…
+          </p>
+        )}
+      </div>
+    );
+  }
 
-  const inProgress = tickets.filter(
-    (ticket) => ticket.status === "In Progress"
-  ).length;
+  const total = stats.total;
+  const open = stats.byStatus.open;
+  const inProgress = stats.byStatus.in_progress;
+  const resolved = stats.byStatus.resolved;
+  const unassigned = stats.unassigned;
+  const unresolved = open + inProgress;
 
-  const resolved = tickets.filter(
-    (ticket) => ticket.status === "Resolved"
-  ).length;
-
-  const unassigned = tickets.filter(
-    (ticket) => ticket.assignee === "Unassigned"
-  ).length;
-
-  const unresolved = tickets.filter(
-    (ticket) => ticket.status !== "Resolved"
-  ).length;
-
-  const priorities = ["High", "Medium", "Low"].map((name) => ({
-    name,
-    count: tickets.filter(
-      (ticket) =>
-        ticket.priority === name &&
-        ticket.status !== "Resolved"
-    ).length,
+  const priorities = ["high", "medium", "low"].map((key) => ({
+    name: key[0].toUpperCase() + key.slice(1),
+    count: stats.unresolvedByPriority[key],
   }));
 
-  const categories = ["Account", "Billing", "Technical"].map(
-    (name) => ({
-      name,
-      count: tickets.filter(
-        (ticket) => ticket.category === name
-      ).length,
-    })
-  );
+  const categories = stats.byCategory.slice(0, 5).map((row) => ({
+    name: row.category.name ?? "Unknown category",
+    count: row.count,
+  }));
 
-  const workload = agents.map((agent) => {
-    const assigned = tickets.filter(
-      (ticket) => ticket.assignee === agent.name
-    );
-
-    return {
-      ...agent,
-      total: assigned.length,
-      open: assigned.filter(
-        (ticket) => ticket.status === "Open"
-      ).length,
-      inProgress: assigned.filter(
-        (ticket) => ticket.status === "In Progress"
-      ).length,
-      resolved: assigned.filter(
-        (ticket) => ticket.status === "Resolved"
-      ).length,
-    };
-  });
+  const workload = stats.byAssignee.slice(0, 5).map((row, index) => ({
+    ...AVATAR_COLORS[index % AVATAR_COLORS.length],
+    name: row.assignee.name ?? "Unknown user",
+    initials: initialsOf(row.assignee.name),
+    total: row.total,
+    open: row.byStatus.open,
+    inProgress: row.byStatus.in_progress,
+    resolved: row.byStatus.resolved,
+  }));
 
   const linkStyle = {
     marginTop: "auto",
@@ -422,6 +366,10 @@ export default function AdminOverview({ onNavigate }) {
             subtitle="Distribution of support requests"
           />
 
+          {categories.length === 0 && (
+            <p style={{ fontSize: "12px", color: "#84978e" }}>No tickets yet.</p>
+          )}
+
           {categories.map((category) => (
             <ProgressRow
               key={category.name}
@@ -455,6 +403,10 @@ export default function AdminOverview({ onNavigate }) {
             title="Agent Workload"
             subtitle="Current support assignments"
           />
+
+          {workload.length === 0 && (
+            <p style={{ fontSize: "12px", color: "#84978e" }}>No tickets are assigned yet.</p>
+          )}
 
           {workload.map((agent) => (
             <div

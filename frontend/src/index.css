@@ -1,1 +1,8 @@
 @import "tailwindcss";
+
+/* In-page links on the landing page scroll smoothly, unless the user prefers reduced motion. */
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}

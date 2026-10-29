@@ -1,53 +1,12 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
+import { useAuth } from "../../auth/useAuth.js";
+import { useApiData } from "../../api/useApiData.js";
+import { adminErrorMessage, getStats } from "../../api/admin.js";
+import { listQueue } from "../../api/tickets.js";
+import { buildTicketCsv, periodStart } from "../staff/reportCsv.js";
 
-// ========================================
-// SAMPLE REPORT DATA
-// ========================================
-
-const tickets = [
-  {
-    id: "HD-1042",
-    category: "Account",
-    priority: "High",
-    status: "Open",
-    assignee: "Unassigned",
-    created: "2026-10-24",
-  },
-  {
-    id: "HD-1041",
-    category: "Billing",
-    priority: "High",
-    status: "In Progress",
-    assignee: "Shwetaleena Kundu",
-    created: "2026-10-23",
-  },
-  {
-    id: "HD-1040",
-    category: "Account",
-    priority: "Medium",
-    status: "Resolved",
-    assignee: "Mimansa Das",
-    created: "2026-10-22",
-  },
-  {
-    id: "HD-1039",
-    category: "Technical",
-    priority: "Medium",
-    status: "Open",
-    assignee: "Unassigned",
-    created: "2026-10-21",
-  },
-  {
-    id: "HD-1038",
-    category: "Account",
-    priority: "Low",
-    status: "In Progress",
-    assignee: "Shwetaleena Kundu",
-    created: "2026-10-20",
-  },
-];
-
-const agents = ["Shwetaleena Kundu", "Mimansa Das"];
+// Most tickets one export downloads (100 per request).
+const EXPORT_MAX_PAGES = 50;
 
 const glassStyle = {
   background: "rgba(255,255,255,0.72)",
@@ -151,129 +110,87 @@ function ReportPanel({ title, subtitle, children }) {
 // MAIN COMPONENT
 // ========================================
 
+// Report figures come from GET /api/admin/stats, limited to the selected period with `from`.
+// The CSV export downloads the matching tickets from the ticket queue.
 export default function AdminReports() {
+  const { token, endSessionIfRejected } = useAuth();
   const [period, setPeriod] = useState("All Time");
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState("");
 
-  // FILTER BY PERIOD
-  const filteredTickets = tickets.filter((ticket) => {
-    if (period === "All Time") return true;
+  const loadStats = useCallback((authToken) => getStats(authToken, { from: periodStart(period) }), [period]);
+  const { data: stats, status, error, reload } = useApiData(loadStats);
 
-    const today = new Date();
-    const createdDate = new Date(`${ticket.created}T00:00:00`);
-
-    const days =
-      (today.getTime() - createdDate.getTime()) /
-      (1000 * 60 * 60 * 24);
-
-    if (period === "Last 7 Days") {
-      return days >= 0 && days < 7;
-    }
-
-    if (period === "Last 30 Days") {
-      return days >= 0 && days < 30;
-    }
-
-    return true;
-  });
-
-  const total = filteredTickets.length;
-
-  const open = filteredTickets.filter(
-    (ticket) => ticket.status === "Open"
-  ).length;
-
-  const inProgress = filteredTickets.filter(
-    (ticket) => ticket.status === "In Progress"
-  ).length;
-
-  const resolved = filteredTickets.filter(
-    (ticket) => ticket.status === "Resolved"
-  ).length;
-
-  const unassigned = filteredTickets.filter(
-    (ticket) => ticket.assignee === "Unassigned"
-  ).length;
+  const total = stats?.total ?? 0;
+  const open = stats?.byStatus.open ?? 0;
+  const inProgress = stats?.byStatus.in_progress ?? 0;
+  const resolved = stats?.byStatus.resolved ?? 0;
+  const unassigned = stats?.unassigned ?? 0;
 
   const resolutionRate =
     total > 0 ? Math.round((resolved / total) * 100) : 0;
 
-  const priorities = ["High", "Medium", "Low"].map((name) => ({
-    name,
-    count: filteredTickets.filter(
-      (ticket) => ticket.priority === name
-    ).length,
+  const priorities = ["high", "medium", "low"].map((key) => ({
+    name: key[0].toUpperCase() + key.slice(1),
+    count: stats?.byPriority[key] ?? 0,
   }));
 
-  const categories = ["Account", "Billing", "Technical"].map(
-    (name) => ({
-      name,
-      count: filteredTickets.filter(
-        (ticket) => ticket.category === name
-      ).length,
-    })
-  );
+  const categories = (stats?.byCategory ?? []).slice(0, 6).map((row) => ({
+    name: row.category.name ?? "Unknown category",
+    count: row.count,
+  }));
 
-  const workload = agents.map((name) => {
-    const assigned = filteredTickets.filter(
-      (ticket) => ticket.assignee === name
-    );
-
-    return {
-      name,
-      assigned: assigned.length,
-      resolved: assigned.filter(
-        (ticket) => ticket.status === "Resolved"
-      ).length,
-    };
-  });
+  const workload = (stats?.byAssignee ?? []).map((row) => ({
+    id: row.assignee.id,
+    name: row.assignee.name ?? "Unknown user",
+    assigned: row.total,
+    resolved: row.byStatus.resolved,
+  }));
 
   // ========================================
   // EXPORT REPORT
   // ========================================
 
-  function exportReport() {
-    const headings = [
-      "Ticket ID",
-      "Category",
-      "Priority",
-      "Status",
-      "Assigned Agent",
-      "Created",
-    ];
+  async function exportReport() {
+    if (exporting) return;
+    setExporting(true);
+    setExportError("");
+    try {
+      const from = periodStart(period);
+      const tickets = [];
+      for (let page = 1; page <= EXPORT_MAX_PAGES; page += 1) {
+        const result = await listQueue(token, { page, limit: 100 });
+        tickets.push(...result.tickets);
+        // Newest first: stop once tickets are older than the period.
+        const reachedOlder = from && result.tickets.some((ticket) => new Date(ticket.createdAt) < from);
+        if (reachedOlder || page * 100 >= result.total) break;
+      }
+      const inPeriod = from ? tickets.filter((ticket) => new Date(ticket.createdAt) >= from) : tickets;
 
-    const rows = filteredTickets.map((ticket) => [
-      ticket.id,
-      ticket.category,
-      ticket.priority,
-      ticket.status,
-      ticket.assignee,
-      ticket.created,
-    ]);
+      const blob = new Blob(["﻿", buildTicketCsv(inPeriod)], {
+        type: "text/csv;charset=utf-8;",
+      });
 
-    const escapeCSV = (value) =>
-      `"${String(value ?? "").replace(/"/g, '""')}"`;
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
 
-    const csv = [headings, ...rows]
-      .map((row) => row.map(escapeCSV).join(","))
-      .join("\r\n");
+      link.href = url;
+      link.download = `helpdesk-report-${period
+        .toLowerCase()
+        .replaceAll(" ", "-")}.csv`;
 
-    const blob = new Blob(["\uFEFF", csv], {
-      type: "text/csv;charset=utf-8;",
-    });
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
 
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-
-    link.href = url;
-    link.download = `helpdesk-report-${period
-      .toLowerCase()
-      .replaceAll(" ", "-")}.csv`;
-
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-
-    URL.revokeObjectURL(url);
+      URL.revokeObjectURL(url);
+    } catch (downloadError) {
+      if (!endSessionIfRejected(downloadError)) {
+        setExportError(adminErrorMessage(downloadError, "The report could not be exported."));
+      }
+    } finally {
+      setExporting(false);
+    }
   }
 
   return (
@@ -311,12 +228,29 @@ export default function AdminReports() {
           <button
             type="button"
             onClick={exportReport}
-            className="rounded-xl bg-emerald-700 px-5 py-3 text-xs font-semibold text-white transition hover:bg-emerald-800"
+            disabled={exporting}
+            aria-busy={exporting}
+            className="rounded-xl bg-emerald-700 px-5 py-3 text-xs font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-70"
           >
-            Export CSV
+            {exporting ? "Exporting…" : "Export CSV"}
           </button>
         </div>
       </div>
+
+      {exportError && (
+        <p role="alert" className="rounded-xl bg-red-50 px-4 py-3 text-xs text-red-700">{exportError}</p>
+      )}
+
+      {status === "error" && (
+        <p role="alert" className="rounded-xl bg-red-50 px-4 py-3 text-xs text-red-700">
+          {adminErrorMessage(error, "Report figures could not be loaded.")}{" "}
+          <button type="button" onClick={reload} className="font-semibold underline">Try again</button>
+        </p>
+      )}
+
+      {status === "loading" && (
+        <p role="status" className="px-1 text-xs text-slate-500">Loading report…</p>
+      )}
 
       {/* SUMMARY STATISTICS */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
@@ -403,6 +337,10 @@ export default function AdminReports() {
           title="Tickets by Category"
           subtitle="Support requests across categories"
         >
+          {stats && categories.length === 0 && (
+            <p className="text-xs text-slate-500">No tickets in this period.</p>
+          )}
+
           {categories.map((category) => (
             <ProgressBar
               key={category.name}
@@ -420,9 +358,13 @@ export default function AdminReports() {
           subtitle="Ticket assignments and resolutions"
         >
           <div className="space-y-4">
+            {stats && workload.length === 0 && (
+              <p className="text-xs text-slate-500">No assigned tickets in this period.</p>
+            )}
+
             {workload.map((agent) => (
               <div
-                key={agent.name}
+                key={agent.id}
                 className="flex items-center justify-between gap-4 rounded-2xl bg-white/60 p-4"
               >
                 <div>
@@ -452,9 +394,8 @@ export default function AdminReports() {
 
       {/* FOOTNOTE */}
       <p className="px-1 text-xs leading-relaxed text-slate-500">
-        Reports currently use sample ticket data. Statistics and CSV
-        exports will reflect live support activity after backend
-        integration.
+        Figures count tickets created in the selected period. &quot;Unassigned&quot; counts
+        unresolved tickets with no agent.
       </p>
     </div>
   );

@@ -1,10 +1,29 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router";
 import HelpDeskHeader from "../../components/common/helpdeskheader.jsx";
 import AgentOverview from "../../components/agent/AgentOverview.jsx";
 import AgentInbox from "../../components/agent/AgentInbox.jsx";
 
 export default function AgentDashboard() {
-  const [activePage, setActivePage] = useState("Overview");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [activePage, setActivePage] = useState(searchParams.get("page") === "Inbox" ? "Inbox" : "Overview");
+  // Ticket to open in the Inbox, e.g. from "View Details" on the Overview.
+  const [openTicketId, setOpenTicketId] = useState(null);
+
+  const openTicket = (ticketId) => {
+    setOpenTicketId(ticketId);
+    setActivePage("Inbox");
+  };
+
+  // Links such as /agent/dashboard?ticket=… (from a notification) open that ticket, then the
+  // address is cleaned up so a reload does not reopen it.
+  const linkedTicket = searchParams.get("ticket");
+  const linkedPage = searchParams.get("page");
+  useEffect(() => {
+    if (linkedTicket) openTicket(linkedTicket);
+    else if (linkedPage === "Inbox" || linkedPage === "Overview") setActivePage(linkedPage);
+    if (linkedTicket || linkedPage) setSearchParams({}, { replace: true });
+  }, [linkedTicket, linkedPage, setSearchParams]);
 
   return (
     <div className="relative min-h-screen overflow-x-hidden bg-[#b9dfd0] px-2 py-3 sm:px-5 sm:py-6 lg:px-10 lg:py-8">
@@ -56,10 +75,10 @@ export default function AgentDashboard() {
           </div>
 
           {/* OVERVIEW */}
-          {activePage === "Overview" && <AgentOverview />}
+          {activePage === "Overview" && <AgentOverview onOpenTicket={openTicket} />}
 
           {/* INBOX */}
-          {activePage === "Inbox" && <AgentInbox />}
+          {activePage === "Inbox" && <AgentInbox key={openTicketId ?? "inbox"} initialTicketId={openTicketId} />}
 
         </main>
       </div>

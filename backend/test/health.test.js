@@ -20,6 +20,12 @@ describe('GET /api/health without a database connection', () => {
 
     assert.equal(res.headers['access-control-allow-origin'], 'http://localhost:5173');
   });
+
+  it('does not advertise the server framework (no X-Powered-By)', async () => {
+    const res = await request(app).get('/api/health');
+
+    assert.equal(res.headers['x-powered-by'], undefined);
+  });
 });
 
 describe('GET /api/health with the test database', () => {

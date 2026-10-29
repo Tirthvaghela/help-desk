@@ -1,159 +1,25 @@
-import { useState } from "react";
-
-// ==============================
-// DEMO TICKET DATA
-// ==============================
-
-const sampleTickets = [
-  {
-    id: "HD-104",
-    subject: "Unable to reset password",
-    customer: "Asha Customer",
-    email: "asha.customer@example.com",
-    initials: "AC",
-    category: "Account & Login",
-    priority: "medium",
-    status: "in_progress",
-    assignedTo: "You",
-    time: "10:42 AM",
-    createdAt: "Oct 25, 2026 · 10:42 AM",
-    messages: [
-      {
-        id: 1,
-        sender: "Asha Customer",
-        role: "customer",
-        message:
-          "Hello, I've been trying to reset my password, but the link keeps showing as expired.",
-        time: "10:42 AM",
-      },
-      {
-        id: 2,
-        sender: "You",
-        role: "agent",
-        message:
-          "Hi Asha! I'll help you with that. Could you confirm whether you're using the latest reset email?",
-        time: "10:48 AM",
-      },
-      {
-        id: 3,
-        sender: "Asha Customer",
-        role: "customer",
-        message:
-          "Yes, I requested another link, but I'm still facing the same issue.",
-        time: "10:51 AM",
-      },
-    ],
-  },
-  {
-    id: "HD-105",
-    subject: "Payment confirmation not received",
-    customer: "Riya Sharma",
-    email: "riya.sharma@example.com",
-    initials: "RS",
-    category: "Billing",
-    priority: "high",
-    status: "open",
-    assignedTo: "You",
-    time: "09:35 AM",
-    createdAt: "Oct 25, 2026 · 09:35 AM",
-    messages: [
-      {
-        id: 1,
-        sender: "Riya Sharma",
-        role: "customer",
-        message:
-          "I completed my payment, but I haven't received a confirmation email.",
-        time: "09:35 AM",
-      },
-    ],
-  },
-  {
-    id: "HD-106",
-    subject: "Account details need updating",
-    customer: "Arjun Patel",
-    email: "arjun.patel@example.com",
-    initials: "AP",
-    category: "Account & Login",
-    priority: "low",
-    status: "resolved",
-    assignedTo: "You",
-    time: "Yesterday",
-    createdAt: "Oct 24, 2026",
-    messages: [
-      {
-        id: 1,
-        sender: "Arjun Patel",
-        role: "customer",
-        message: "I need help updating my account details.",
-        time: "Yesterday",
-      },
-      {
-        id: 2,
-        sender: "You",
-        role: "agent",
-        message:
-          "Your account information has been updated successfully.",
-        time: "Yesterday",
-      },
-    ],
-  },
-  {
-    id: "HD-107",
-    subject: "Unable to access dashboard",
-    customer: "Neha Singh",
-    email: "neha.singh@example.com",
-    initials: "NS",
-    category: "Technical Support",
-    priority: "high",
-    status: "open",
-    assignedTo: null,
-    time: "Yesterday",
-    createdAt: "Oct 24, 2026",
-    messages: [
-      {
-        id: 1,
-        sender: "Neha Singh",
-        role: "customer",
-        message:
-          "I can log in, but my dashboard isn't loading. Could someone help?",
-        time: "Yesterday",
-      },
-    ],
-  },
-  {
-    id: "HD-108",
-    subject: "Invoice download issue",
-    customer: "Kabir Mehta",
-    email: "kabir.mehta@example.com",
-    initials: "KM",
-    category: "Billing",
-    priority: "medium",
-    status: "open",
-    assignedTo: null,
-    time: "Oct 22",
-    createdAt: "Oct 22, 2026",
-    messages: [
-      {
-        id: 1,
-        sender: "Kabir Mehta",
-        role: "customer",
-        message:
-          "I'm unable to download my invoice. The download button doesn't respond.",
-        time: "Oct 22",
-      },
-    ],
-  },
-];
+import { useCallback, useEffect, useState } from "react";
+import { useAuth } from "../../auth/useAuth.js";
+import { useApiData } from "../../api/useApiData.js";
+import {
+  addComment,
+  assignTicket,
+  getTicket,
+  listComments,
+  listQueue,
+  nextStatus,
+  TICKET_LIMITS,
+  ticketErrorMessage,
+  updateTicketStatus,
+} from "../../api/tickets.js";
+import { formatDateTime, formatShortTime, initialsOf, STATUS_LABELS } from "../staff/staffFormat.js";
+import { useDebouncedValue } from "../staff/useDebouncedValue.js";
 
 // ==============================
 // STYLES AND LABELS
 // ==============================
 
-const statusLabels = {
-  open: "Open",
-  in_progress: "In Progress",
-  resolved: "Resolved",
-};
+const statusLabels = STATUS_LABELS;
 
 const statusStyles = {
   open: "bg-[#e4efff] text-[#4b79b2]",
@@ -174,6 +40,8 @@ const filters = [
   { label: "Resolved", value: "resolved" },
 ];
 
+const PAGE_SIZE = 25;
+
 // ==============================
 // SEARCH ICON
 // ==============================
@@ -189,6 +57,7 @@ function SearchIcon() {
       strokeWidth="1.8"
       strokeLinecap="round"
       strokeLinejoin="round"
+      aria-hidden="true"
     >
       <circle cx="10.8" cy="10.8" r="6.8" />
       <path d="m16 16 4.5 4.5" />
@@ -201,10 +70,13 @@ function SearchIcon() {
 // ==============================
 
 function TicketItem({ ticket, selected, onClick }) {
+  const customer = ticket.createdBy?.name ?? "Customer";
+
   return (
     <button
       type="button"
       onClick={onClick}
+      aria-current={selected ? "true" : undefined}
       className={`w-full rounded-[20px] border p-4 text-left transition-all duration-200 ${
         selected
           ? "border-[#a5d7be] bg-[#e1f4e9] shadow-[0_5px_18px_rgba(45,112,82,0.09)]"
@@ -214,23 +86,23 @@ function TicketItem({ ticket, selected, onClick }) {
       {/* CUSTOMER AVATAR AND NAME */}
       <div className="flex items-start gap-3">
         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#d7f0e3] text-[12px] font-semibold text-[#307b58]">
-          {ticket.initials}
+          {initialsOf(customer)}
         </div>
 
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div>
               <h3 className="text-[13px] font-semibold text-[#243e35]">
-                {ticket.customer}
+                {customer}
               </h3>
 
               <p className="mt-1 text-[11px] text-[#789084]">
-                {ticket.id}
+                {ticket.ticketNumber}
               </p>
             </div>
 
             <span className="text-[10px] text-[#8b9d94]">
-              {ticket.time}
+              {formatShortTime(ticket.createdAt)}
             </span>
           </div>
         </div>
@@ -274,7 +146,7 @@ function TicketItem({ ticket, selected, onClick }) {
 // ==============================
 
 function MessageBubble({ message }) {
-  const isAgent = message.role === "agent";
+  const isAgent = message.role !== "customer";
 
   return (
     <div
@@ -293,7 +165,7 @@ function MessageBubble({ message }) {
           {message.sender}
         </p>
 
-        <p className="mt-1.5 whitespace-pre-wrap text-[13px] leading-relaxed">
+        <p className="mt-1.5 whitespace-pre-wrap break-words text-[13px] leading-relaxed">
           {message.message}
         </p>
 
@@ -305,172 +177,178 @@ function MessageBubble({ message }) {
   );
 }
 
+// Turns the ticket's description and comments into chat messages, oldest first.
+function toMessages(ticket, comments, currentUserId) {
+  const opening = {
+    id: "description",
+    sender: `${ticket.createdBy?.name ?? "Customer"} · original request`,
+    role: "customer",
+    message: ticket.description,
+    time: formatShortTime(ticket.createdAt),
+  };
+  return [
+    opening,
+    ...comments.map((comment) => ({
+      id: comment.id,
+      sender: comment.author?.id === currentUserId ? "You" : comment.author?.name ?? "Unknown",
+      role: comment.author?.role ?? "customer",
+      message: comment.message,
+      time: formatShortTime(comment.createdAt),
+    })),
+  ];
+}
+
 // ==============================
 // MAIN AGENT INBOX
 // ==============================
 
-export default function AgentInbox() {
-  const [tickets, setTickets] = useState(sampleTickets);
+// The agent's queue: unassigned tickets and tickets assigned to them (contract OPEN-1).
+// Every change is sent to the API, and the screen only changes once the server confirms it.
+export default function AgentInbox({ initialTicketId = null }) {
+  const { user, token, endSessionIfRejected } = useAuth();
 
-  const [selectedId, setSelectedId] = useState(sampleTickets[0].id);
+  const [selectedId, setSelectedId] = useState(initialTicketId);
 
   const [activeFilter, setActiveFilter] = useState("all");
   const [priorityFilter, setPriorityFilter] = useState("all");
   const [assignedOnly, setAssignedOnly] = useState(false);
   const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
   const [reply, setReply] = useState("");
 
-  // ==============================
-  // UPDATE TICKET DETAILS
-  // ==============================
+  const [busy, setBusy] = useState(null); // "assign" | "priority" | "status" | "reply"
+  const [actionError, setActionError] = useState(null);
 
-  const updateTicket = (ticketId, field, value) => {
-    setTickets((previousTickets) =>
-      previousTickets.map((ticket) =>
-        ticket.id === ticketId
-          ? { ...ticket, [field]: value }
-          : ticket
-      )
-    );
-  };
+  const query = useDebouncedValue(search.trim(), 300);
+  const assignee = assignedOnly ? "me" : undefined;
+
+  // Back to the first page whenever the filters change.
+  useEffect(() => {
+    setPage(1);
+  }, [activeFilter, priorityFilter, assignedOnly, query]);
 
   // ==============================
-  // SEND DEMO REPLY
+  // LOAD QUEUE, COUNTS AND THE SELECTED TICKET
   // ==============================
 
-  const handleSendReply = () => {
-    if (!selectedTicket || !reply.trim()) return;
-
-    if (selectedTicket.assignedTo !== "You") return;
-
-    const newMessage = {
-      id: Date.now(),
-      sender: "You",
-      role: "agent",
-      message: reply.trim(),
-      time: new Date().toLocaleTimeString([], {
-        hour: "2-digit",
-        minute: "2-digit",
+  const loadQueue = useCallback(
+    (authToken) =>
+      listQueue(authToken, {
+        status: activeFilter,
+        priority: priorityFilter,
+        assignee,
+        q: query,
+        page,
+        limit: PAGE_SIZE,
       }),
-    };
+    [activeFilter, priorityFilter, assignee, query, page],
+  );
+  const queue = useApiData(loadQueue);
 
-    setTickets((previousTickets) =>
-      previousTickets.map((ticket) =>
-        ticket.id === selectedTicket.id
-          ? {
-              ...ticket,
-              messages: [...ticket.messages, newMessage],
-            }
-          : ticket
-      )
-    );
+  const loadCounts = useCallback(
+    async (authToken) => {
+      const results = await Promise.all(
+        filters.map((filter) =>
+          listQueue(authToken, { status: filter.value, priority: priorityFilter, assignee, q: query, limit: 1 }),
+        ),
+      );
+      return Object.fromEntries(filters.map((filter, index) => [filter.value, results[index].total]));
+    },
+    [priorityFilter, assignee, query],
+  );
+  const counts = useApiData(loadCounts);
 
+  const tickets = queue.data?.tickets ?? [];
+  const totalPages = queue.data ? Math.max(1, Math.ceil(queue.data.total / PAGE_SIZE)) : 1;
+
+  // Open the first ticket in the list when nothing is selected yet.
+  const firstTicketId = tickets[0]?.id ?? null;
+  useEffect(() => {
+    if (!selectedId && firstTicketId) setSelectedId(firstTicketId);
+  }, [selectedId, firstTicketId]);
+
+  const loadSelected = useCallback(
+    async (authToken) => {
+      if (!selectedId) return null;
+      const [ticket, comments] = await Promise.all([
+        getTicket(authToken, selectedId),
+        listComments(authToken, selectedId),
+      ]);
+      return { ticket, comments };
+    },
+    [selectedId],
+  );
+  const detail = useApiData(loadSelected);
+  const selectedTicket = detail.data?.ticket ?? null;
+  const comments = detail.data?.comments ?? [];
+
+  const refreshLists = () => {
+    queue.reload();
+    counts.reload();
+  };
+
+  const selectTicket = (id) => {
+    setSelectedId(id);
     setReply("");
+    setActionError(null);
   };
 
   // ==============================
-  // FILTER TICKETS
+  // SERVER ACTIONS
   // ==============================
 
-  const filteredTickets = tickets.filter((ticket) => {
-    const matchesStatus =
-      activeFilter === "all" ||
-      ticket.status === activeFilter;
+  const assignedToMe = selectedTicket?.assignedTo?.id === user?.id;
 
-    const matchesPriority =
-      priorityFilter === "all" ||
-      ticket.priority === priorityFilter;
+  async function runAction(kind, action) {
+    if (busy || !selectedTicket) return;
+    setBusy(kind);
+    setActionError(null);
+    try {
+      await action();
+    } catch (error) {
+      if (!endSessionIfRejected(error)) {
+        setActionError(ticketErrorMessage(error, "The change could not be saved. Please try again."));
+      }
+    } finally {
+      setBusy(null);
+    }
+  }
 
-    const query = search.trim().toLowerCase();
-
-    const matchesSearch =
-      ticket.subject.toLowerCase().includes(query) ||
-      ticket.id.toLowerCase().includes(query) ||
-      ticket.customer.toLowerCase().includes(query) ||
-      ticket.email.toLowerCase().includes(query);
-
-    const matchesAssignment =
-      !assignedOnly || ticket.assignedTo === "You";
-
-    return (
-      matchesStatus &&
-      matchesPriority &&
-      matchesSearch &&
-      matchesAssignment
-    );
-  });
-
-  // ==============================
-  // SELECTED TICKET
-  // ==============================
-
-  const selectedTicket =
-    filteredTickets.find(
-      (ticket) => ticket.id === selectedId
-    ) ||
-    filteredTickets[0] ||
-    null;
-
-  // ==============================
-  // STATUS COUNTS
-  // ==============================
-
-  const filterCounts = {
-    all: tickets.length,
-    open: tickets.filter(
-      (ticket) => ticket.status === "open"
-    ).length,
-    in_progress: tickets.filter(
-      (ticket) => ticket.status === "in_progress"
-    ).length,
-    resolved: tickets.filter(
-      (ticket) => ticket.status === "resolved"
-    ).length,
+  const applyTicket = (ticket) => {
+    detail.setData((previous) => ({ ...previous, ticket }));
+    refreshLists();
   };
-
-  // ==============================
-  // HANDLE STATUS CHANGE
-  // ==============================
 
   const handleStatusChange = (event) => {
-    if (!selectedTicket) return;
-
-    updateTicket(
-      selectedTicket.id,
-      "status",
-      event.target.value
-    );
+    const status = event.target.value;
+    if (status === selectedTicket.status) return;
+    runAction("status", async () => applyTicket(await updateTicketStatus(token, selectedTicket.id, status)));
   };
-
-  // ==============================
-  // HANDLE PRIORITY CHANGE
-  // ==============================
 
   const handlePriorityChange = (event) => {
-    if (!selectedTicket) return;
-
-    updateTicket(
-      selectedTicket.id,
-      "priority",
-      event.target.value
-    );
+    const priority = event.target.value;
+    runAction("priority", async () => applyTicket(await assignTicket(token, selectedTicket.id, { priority })));
   };
-
-  // ==============================
-  // HANDLE ASSIGNEE CHANGE
-  // ==============================
 
   const handleAssigneeChange = (event) => {
-    if (!selectedTicket) return;
-
-    const value = event.target.value;
-
-    updateTicket(
-      selectedTicket.id,
-      "assignedTo",
-      value === "unassigned" ? null : value
-    );
+    const assignedTo = event.target.value === "me" ? user.id : null;
+    runAction("assign", async () => applyTicket(await assignTicket(token, selectedTicket.id, { assignedTo })));
   };
+
+  const handleSendReply = () => {
+    const message = reply.trim();
+    if (!message || !assignedToMe) return;
+    runAction("reply", async () => {
+      const comment = await addComment(token, selectedTicket.id, message);
+      detail.setData((previous) => ({ ...previous, comments: [...previous.comments, comment] }));
+      setReply("");
+      refreshLists();
+    });
+  };
+
+  const replyTooLong = reply.trim().length > TICKET_LIMITS.comment.max;
+  const allowedNext = selectedTicket ? nextStatus(selectedTicket.status) : null;
+  const messages = selectedTicket ? toMessages(selectedTicket, comments, user?.id) : [];
 
   return (
     <div className="grid min-w-0 grid-cols-1 gap-4 sm:gap-5 xl:min-h-[650px] xl:grid-cols-[minmax(280px,390px)_minmax(0,1fr)]">
@@ -489,12 +367,12 @@ export default function AgentInbox() {
             </h2>
 
             <p className="mt-1 text-[12px] text-[#789084]">
-              Manage incoming requests
+              Unassigned tickets and tickets assigned to you
             </p>
           </div>
 
           <span className="shrink-0 rounded-full bg-white/80 px-3 py-1.5 text-[11px] font-semibold text-[#477b65]">
-            {filteredTickets.length} Tickets
+            {queue.data ? `${queue.data.total} Tickets` : "…"}
           </span>
         </div>
 
@@ -508,7 +386,8 @@ export default function AgentInbox() {
             onChange={(event) =>
               setSearch(event.target.value)
             }
-            placeholder="Search ID, subject or customer..."
+            maxLength={100}
+            placeholder="Search ticket ID or subject..."
             aria-label="Search tickets"
             className="w-full min-w-0 bg-transparent text-[13px] text-[#263e35] outline-none placeholder:text-[#9aaba1]"
           />
@@ -520,6 +399,7 @@ export default function AgentInbox() {
             <button
               key={filter.value}
               type="button"
+              aria-pressed={activeFilter === filter.value}
               onClick={() =>
                 setActiveFilter(filter.value)
               }
@@ -532,7 +412,7 @@ export default function AgentInbox() {
               {filter.label}
 
               <span className="ml-1 opacity-70">
-                {filterCounts[filter.value]}
+                {counts.data?.[filter.value] ?? "·"}
               </span>
             </button>
           ))}
@@ -574,20 +454,37 @@ export default function AgentInbox() {
         </div>
 
         {/* TICKET LIST */}
-        <div className="mt-5 max-h-[380px] space-y-3 overflow-y-auto pr-1 sm:max-h-[500px] xl:max-h-[680px]">
+        <div
+          className="mt-5 max-h-[380px] space-y-3 overflow-y-auto pr-1 sm:max-h-[500px] xl:max-h-[680px]"
+          aria-busy={queue.status === "loading"}
+        >
 
-          {filteredTickets.length > 0 ? (
-            filteredTickets.map((ticket) => (
+          {queue.status === "error" ? (
+            <div role="alert" className="rounded-[20px] border border-red-100 bg-red-50/80 px-5 py-8 text-center">
+              <p className="text-[13px] font-semibold text-red-700">
+                {ticketErrorMessage(queue.error, "The inbox could not be loaded.")}
+              </p>
+              <button
+                type="button"
+                onClick={refreshLists}
+                className="mt-3 rounded-full bg-white px-4 py-2 text-[12px] font-semibold text-red-700 shadow-sm hover:bg-red-100"
+              >
+                Try again
+              </button>
+            </div>
+          ) : !queue.data ? (
+            <p role="status" className="px-2 py-10 text-center text-[13px] text-[#789084]">
+              Loading tickets…
+            </p>
+          ) : tickets.length > 0 ? (
+            tickets.map((ticket) => (
               <TicketItem
                 key={ticket.id}
                 ticket={ticket}
                 selected={
-                  selectedTicket?.id === ticket.id
+                  selectedId === ticket.id
                 }
-                onClick={() => {
-                  setSelectedId(ticket.id);
-                  setReply("");
-                }}
+                onClick={() => selectTicket(ticket.id)}
               />
             ))
           ) : (
@@ -597,11 +494,36 @@ export default function AgentInbox() {
               </p>
 
               <p className="mt-2 text-[12px] text-[#83988a]">
-                Try changing your search or filters.
+                {query || activeFilter !== "all" || priorityFilter !== "all" || assignedOnly
+                  ? "Try changing your search or filters."
+                  : "New customer tickets will appear here."}
               </p>
             </div>
           )}
         </div>
+
+        {/* PAGES */}
+        {queue.data && totalPages > 1 && (
+          <div className="mt-4 flex items-center justify-between gap-2 text-[11px] text-[#617b6d]">
+            <button
+              type="button"
+              onClick={() => setPage((current) => current - 1)}
+              disabled={page <= 1}
+              className="rounded-full border border-white/80 bg-white/60 px-3 py-2 font-medium hover:bg-white/85 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              ← Newer
+            </button>
+            <span>Page {page} of {totalPages}</span>
+            <button
+              type="button"
+              onClick={() => setPage((current) => current + 1)}
+              disabled={page >= totalPages}
+              className="rounded-full border border-white/80 bg-white/60 px-3 py-2 font-medium hover:bg-white/85 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Older →
+            </button>
+          </div>
+        )}
       </section>
 
       {/* ==========================
@@ -610,7 +532,24 @@ export default function AgentInbox() {
 
       <section className="flex min-h-[480px] min-w-0 flex-col overflow-hidden rounded-[20px] border border-white/85 bg-white/70 shadow-[0_8px_30px_rgba(35,83,72,0.06)] backdrop-blur-xl sm:min-h-[560px] sm:rounded-[26px] xl:min-h-[620px]">
 
-        {selectedTicket ? (
+        {selectedId && detail.status === "error" && !selectedTicket ? (
+          <div role="alert" className="flex flex-1 flex-col items-center justify-center px-6 text-center">
+            <p className="text-[14px] font-semibold text-red-700">
+              {ticketErrorMessage(detail.error, "This ticket could not be loaded.")}
+            </p>
+            <button
+              type="button"
+              onClick={detail.reload}
+              className="mt-4 rounded-full bg-[#2e8666] px-5 py-2.5 text-[12px] font-semibold text-white hover:bg-[#246d52]"
+            >
+              Try again
+            </button>
+          </div>
+        ) : selectedId && !selectedTicket ? (
+          <p role="status" className="flex flex-1 items-center justify-center text-[13px] text-[#789084]">
+            Loading ticket…
+          </p>
+        ) : selectedTicket ? (
           <>
 
             {/* TICKET HEADER */}
@@ -622,7 +561,7 @@ export default function AgentInbox() {
 
                   {/* CUSTOMER AVATAR */}
                   <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#d9f0e3] text-[12px] font-bold text-[#307b58]">
-                    {selectedTicket.initials}
+                    {initialsOf(selectedTicket.createdBy?.name)}
                   </div>
 
                   {/* TICKET DETAILS */}
@@ -632,12 +571,14 @@ export default function AgentInbox() {
                     </h2>
 
                     <p className="mt-1 break-words text-[11px] text-[#728b7e]">
-                      {selectedTicket.id} ·{" "}
-                      {selectedTicket.customer}
+                      {selectedTicket.ticketNumber} ·{" "}
+                      {selectedTicket.createdBy?.name}
                     </p>
 
-                    <p className="mt-1 break-all text-[11px] text-[#728b7e]">
-                      {selectedTicket.email}
+                    <p className="mt-1 break-words text-[11px] text-[#728b7e]">
+                      {selectedTicket.assignedTo
+                        ? `Assigned to ${assignedToMe ? "you" : selectedTicket.assignedTo.name}`
+                        : "Not assigned yet"}
                     </p>
                   </div>
                 </div>
@@ -670,31 +611,36 @@ export default function AgentInbox() {
 
                 {/* STATUS */}
                 <label className="min-w-0 text-[11px] font-semibold text-[#60796e]">
-                  Status
+                  Status{busy === "status" && " · saving…"}
 
                   <select
                     value={selectedTicket.status}
                     onChange={handleStatusChange}
-                    className="mt-1.5 w-full cursor-pointer rounded-xl border border-white/90 bg-white/75 px-3 py-2.5 text-[12px] font-medium text-[#355647] outline-none transition focus:border-[#83c6a0] focus:ring-2 focus:ring-[#83c6a0]/30"
+                    disabled={Boolean(busy) || !allowedNext}
+                    className="mt-1.5 w-full cursor-pointer rounded-xl border border-white/90 bg-white/75 px-3 py-2.5 text-[12px] font-medium text-[#355647] outline-none transition focus:border-[#83c6a0] focus:ring-2 focus:ring-[#83c6a0]/30 disabled:cursor-not-allowed disabled:opacity-70"
                   >
-                    <option value="open">Open</option>
-                    <option value="in_progress">
-                      In Progress
-                    </option>
-                    <option value="resolved">
-                      Resolved
-                    </option>
+                    {/* Status only moves forward, one step at a time. */}
+                    {["open", "in_progress", "resolved"].map((status) => (
+                      <option
+                        key={status}
+                        value={status}
+                        disabled={status !== selectedTicket.status && status !== allowedNext}
+                      >
+                        {statusLabels[status]}
+                      </option>
+                    ))}
                   </select>
                 </label>
 
                 {/* PRIORITY */}
                 <label className="min-w-0 text-[11px] font-semibold text-[#60796e]">
-                  Priority
+                  Priority{busy === "priority" && " · saving…"}
 
                   <select
                     value={selectedTicket.priority}
                     onChange={handlePriorityChange}
-                    className="mt-1.5 w-full cursor-pointer rounded-xl border border-white/90 bg-white/75 px-3 py-2.5 text-[12px] font-medium text-[#355647] outline-none transition focus:border-[#83c6a0] focus:ring-2 focus:ring-[#83c6a0]/30"
+                    disabled={Boolean(busy)}
+                    className="mt-1.5 w-full cursor-pointer rounded-xl border border-white/90 bg-white/75 px-3 py-2.5 text-[12px] font-medium text-[#355647] outline-none transition focus:border-[#83c6a0] focus:ring-2 focus:ring-[#83c6a0]/30 disabled:cursor-not-allowed disabled:opacity-70"
                   >
                     <option value="low">Low</option>
                     <option value="medium">Medium</option>
@@ -704,21 +650,21 @@ export default function AgentInbox() {
 
                 {/* ASSIGNEE */}
                 <label className="min-w-0 text-[11px] font-semibold text-[#60796e]">
-                  Assignee
+                  Assignee{busy === "assign" && " · saving…"}
 
                   <select
                     value={
-                      selectedTicket.assignedTo ||
-                      "unassigned"
+                      assignedToMe ? "me" : "unassigned"
                     }
                     onChange={handleAssigneeChange}
-                    className="mt-1.5 w-full cursor-pointer rounded-xl border border-white/90 bg-white/75 px-3 py-2.5 text-[12px] font-medium text-[#355647] outline-none transition focus:border-[#83c6a0] focus:ring-2 focus:ring-[#83c6a0]/30"
+                    disabled={Boolean(busy)}
+                    className="mt-1.5 w-full cursor-pointer rounded-xl border border-white/90 bg-white/75 px-3 py-2.5 text-[12px] font-medium text-[#355647] outline-none transition focus:border-[#83c6a0] focus:ring-2 focus:ring-[#83c6a0]/30 disabled:cursor-not-allowed disabled:opacity-70"
                   >
                     <option value="unassigned">
                       Unassigned
                     </option>
 
-                    <option value="You">
+                    <option value="me">
                       You (Agent)
                     </option>
                   </select>
@@ -728,8 +674,8 @@ export default function AgentInbox() {
               {/* CATEGORY AND DATE */}
               <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[11px] text-[#779085]">
                 <span>
-                  {selectedTicket.category} · Opened{" "}
-                  {selectedTicket.createdAt}
+                  {selectedTicket.category?.name ?? "No category"} · Opened{" "}
+                  {formatDateTime(selectedTicket.createdAt)}
                 </span>
 
                 {!selectedTicket.assignedTo && (
@@ -738,6 +684,12 @@ export default function AgentInbox() {
                   </span>
                 )}
               </div>
+
+              {actionError && (
+                <p role="alert" className="mt-3 rounded-xl bg-red-50 px-3 py-2 text-[12px] text-red-700">
+                  {actionError}
+                </p>
+              )}
             </div>
 
             {/* ==========================
@@ -752,7 +704,7 @@ export default function AgentInbox() {
                 </span>
               </div>
 
-              {selectedTicket.messages.map((message) => (
+              {messages.map((message) => (
                 <MessageBubble
                   key={message.id}
                   message={message}
@@ -782,43 +734,51 @@ export default function AgentInbox() {
                   onChange={(event) =>
                     setReply(event.target.value)
                   }
+                  disabled={busy === "reply"}
                   placeholder={`Reply to ${
-                    selectedTicket.customer.split(" ")[0]
+                    (selectedTicket.createdBy?.name ?? "the customer").split(" ")[0]
                   }...`}
                   className="min-h-[68px] w-full resize-y bg-transparent px-2 py-2 text-[13px] text-[#294534] outline-none placeholder:text-[#9aaba1]"
                 />
 
-                <div className="flex justify-end">
+                <div className="flex items-center justify-between gap-3">
+                  <span className={`px-2 text-[10px] ${replyTooLong ? "text-red-600" : "text-[#9aaba1]"}`}>
+                    {reply.trim().length}/{TICKET_LIMITS.comment.max}
+                  </span>
                   <button
                     type="button"
                     onClick={handleSendReply}
                     disabled={
                       !reply.trim() ||
-                      selectedTicket.assignedTo !== "You"
+                      replyTooLong ||
+                      !assignedToMe ||
+                      Boolean(busy)
                     }
+                    aria-busy={busy === "reply"}
                     title={
-                      selectedTicket.assignedTo !== "You"
+                      !assignedToMe
                         ? "Assign this ticket to yourself before replying"
-                        : "Send demo reply"
+                        : "Send reply"
                     }
                     className="rounded-full bg-[#2e8666] px-5 py-2.5 text-[12px] font-semibold text-white transition hover:bg-[#246d52] disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    Send Reply →
+                    {busy === "reply" ? "Sending…" : "Send Reply →"}
                   </button>
                 </div>
               </div>
 
-              <p className="mt-2 text-[11px] text-[#8b9d93]">
-                Preview mode · Changes and replies are temporary
-                until backend integration.
-              </p>
+              {!assignedToMe && (
+                <p className="mt-2 text-[11px] text-[#8b9d93]">
+                  Assign this ticket to yourself to reply.
+                </p>
+              )}
             </div>
           </>
         ) : (
           /* NO TICKET SELECTED */
           <div className="flex flex-1 flex-col items-center justify-center px-6 text-center">
 
-            <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-[22px] bg-[#e1f3e9] text-[26px]">
+            <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-[22px] bg-[#e1f3e9] text-[26px]" aria-hidden="true">
               ✉
             </div>
 
