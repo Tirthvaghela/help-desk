@@ -4,6 +4,7 @@ import { ApiError } from '../utils/ApiError.js';
 import { accessibleTicketFilter, findAccessibleTicket } from '../utils/ticketAccess.js';
 import { requireString } from '../utils/validate.js';
 import { serializeComment, USER_SUMMARY_FIELDS } from '../utils/ticketSerializers.js';
+import { notifyComment } from '../utils/notifications.js';
 
 // Ticket conversation endpoints (API contract §9, D-3, D-4). Owner: agent-workflow module.
 
@@ -39,5 +40,6 @@ export async function addComment(req, res) {
 
   await comment.populate({ path: 'author', select: USER_SUMMARY_FIELDS });
 
+  await notifyComment(ticket, comment, req.user);
   res.status(201).json({ comment: serializeComment(comment) });
 }

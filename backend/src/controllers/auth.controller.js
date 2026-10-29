@@ -3,14 +3,10 @@ import { User } from '../models/User.js';
 import { ApiError } from '../utils/ApiError.js';
 import { requireEmail, requireJsonBody, requireString } from '../utils/validate.js';
 import { signToken } from '../utils/token.js';
+import { BCRYPT_COST, hashPassword, requireExistingPassword, requireNewPassword } from '../utils/password.js';
+import { serializeUser } from '../utils/userSerializer.js';
 
 // Authentication endpoints (API contract §6).
-
-const BCRYPT_COST = 12;
-const PASSWORD_MIN_LENGTH = 8;
-// Registration accepted up to 128 characters before the 72-byte check was added, so login
-// keeps that limit and existing accounts can still sign in.
-const LOGIN_PASSWORD_MAX_LENGTH = 128;
 
 function invalidCredentials() {
   return ApiError.unauthorized('Invalid email or password', 'INVALID_CREDENTIALS');
@@ -22,28 +18,6 @@ let dummyHashPromise;
 function dummyHash() {
   dummyHashPromise ??= bcrypt.hash('placeholder-password-for-timing', BCRYPT_COST);
   return dummyHashPromise;
-}
-
-// User shape from the contract (§3). Never includes passwordHash.
-function serializeUser(user) {
-  return {
-    id: String(user._id),
-    name: user.name,
-    email: user.email,
-    role: user.role,
-    isActive: user.isActive,
-    createdAt: user.createdAt,
-  };
-}
-
-// bcrypt only uses the first 72 bytes of a password, so longer ones are rejected rather
-// than silently shortened. Bytes, not characters: "€" is one character but three bytes.
-function requireNewPassword(value) {
-  const password = requireString(value, 'password', { min: PASSWORD_MIN_LENGTH });
-  if (bcrypt.truncates(password)) {
-    throw ApiError.badRequest('password must be at most 72 bytes (some characters use more than one byte)');
-  }
-  return password;
 }
 
 // POST /api/auth/register — public sign-up. Always creates a customer: any role or other
@@ -59,7 +33,7 @@ export async function register(req, res) {
     throw emailTaken();
   }
 
-  const passwordHash = await bcrypt.hash(password, BCRYPT_COST);
+  const passwordHash = await hashPassword(password);
   let user;
   try {
     user = await User.create({ name, email, passwordHash, role: 'customer' });
@@ -78,7 +52,7 @@ export async function register(req, res) {
 export async function login(req, res) {
   const body = requireJsonBody(req.body);
   const email = requireEmail(body.email);
-  const password = requireString(body.password, 'password', { max: LOGIN_PASSWORD_MAX_LENGTH });
+  const password = requireExistingPassword(body.password);
 
   const user = await User.findOne({ email }).select('+passwordHash');
   const passwordMatches = await bcrypt.compare(password, user?.passwordHash ?? (await dummyHash()));
@@ -95,4 +69,26 @@ export async function login(req, res) {
 // GET /api/auth/me — the signed-in user, for restoring a session after a page reload.
 export function me(req, res) {
   res.json({ user: serializeUser(req.user) });
+}
+
+// PATCH /api/auth/me — the signed-in user updates their own profile. Only `name` can be
+// changed here: email changes would need verification, password changes need their own
+// flow with the current password, and role/status are admin-only (§11). Other fields are
+// ignored, like everywhere else in the API (§2).
+export async function updateMe(req, res) {
+  const body = requireJsonBody(req.body);
+  if (body.name === undefined) {
+    throw ApiError.badRequest('Provide a name to update');
+  }
+  const name = requireString(body.name, 'name', { min: 2, max: 80 });
+
+  const user = await User.findByIdAndUpdate(
+    req.user._id,
+    { $set: { name } },
+    { returnDocument: 'after', runValidators: true },
+  );
+  if (!user) {
+    throw ApiError.unauthorized('Invalid or expired token');
+  }
+  res.json({ user: serializeUser(user) });
 }

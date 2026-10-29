@@ -39,6 +39,13 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    // Copied into every sign-in token. Incrementing it (password change or reset) makes
+    // all earlier tokens invalid, i.e. signs the user out everywhere. Never returned.
+    tokenVersion: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
   },
   { timestamps: true },
 );

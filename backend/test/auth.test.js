@@ -53,13 +53,16 @@ async function expectError(req, status, code) {
 }
 
 describe('signToken / verifyToken', () => {
-  it('puts only the user id in the token and sets an expiry', () => {
+  it('puts only the user id and token version in the token and sets an expiry', () => {
     const id = new mongoose.Types.ObjectId();
     const payload = verifyToken(signToken({ _id: id }));
 
     assert.equal(payload.sub, String(id));
+    assert.equal(payload.ver, 0, 'users without a tokenVersion count as version 0');
     assert.ok(payload.exp > payload.iat);
-    assert.deepEqual(Object.keys(payload).sort(), ['exp', 'iat', 'sub']);
+    // No role, email or name: those are always read from the database.
+    assert.deepEqual(Object.keys(payload).sort(), ['exp', 'iat', 'sub', 'ver']);
+    assert.equal(verifyToken(signToken({ _id: id, tokenVersion: 3 })).ver, 3);
   });
 
   it('refuses to sign without a user id', () => {

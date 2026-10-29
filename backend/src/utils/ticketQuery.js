@@ -20,7 +20,7 @@ export function escapeRegex(text) {
 
 // Returns a query parameter as a trimmed string, or undefined when it is absent or empty.
 // Repeated parameters (?status=a&status=b) arrive as arrays and are rejected.
-function readParam(query, name) {
+export function readParam(query, name) {
   const value = query[name];
   if (value === undefined) return undefined;
   if (typeof value !== 'string') {
@@ -38,7 +38,7 @@ function readObjectId(query, name) {
   return value;
 }
 
-function readPositiveInteger(query, name, { fallback, max = Number.MAX_SAFE_INTEGER }) {
+export function readPositiveInteger(query, name, { fallback, max = Number.MAX_SAFE_INTEGER }) {
   const value = readParam(query, name);
   if (value === undefined) return fallback;
 

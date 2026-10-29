@@ -5,6 +5,7 @@ import { parseQueueQuery, withAccessScope } from '../utils/ticketQuery.js';
 import { assertAssignmentAllowed, parseAssignBody, requireEligibleAssignee } from '../utils/ticketAssign.js';
 import { assertStatusTransition, parseStatusBody } from '../utils/ticketStatus.js';
 import { serializeTicket, TICKET_DETAIL_POPULATE, TICKET_LIST_POPULATE } from '../utils/ticketSerializers.js';
+import { notifyAssignmentChange, notifyStatusChange } from '../utils/notifications.js';
 
 // Agent workflow ticket endpoints (API contract §7 GET /:id, §8). Owner: agent-workflow module.
 
@@ -58,6 +59,7 @@ export async function assignTicket(req, res) {
     throw ApiError.conflict('The ticket changed while it was being updated; please retry');
   }
 
+  await notifyAssignmentChange(ticket, updated, req.user);
   await respondWithTicket(res, updated);
 }
 
@@ -84,5 +86,6 @@ export async function updateTicketStatus(req, res) {
     throw ApiError.conflict('The ticket changed while it was being updated; please retry');
   }
 
+  await notifyStatusChange(updated, req.user);
   await respondWithTicket(res, updated);
 }
