@@ -1,4 +1,4 @@
-# Help Desk API Contract
+**Yes** |**Yes** |**Yes** |**Yes** |**Yes** |**Yes** |# Help Desk API Contract
 
 > **Status: PROPOSAL (draft v0.5).** Except for `GET /api/health`, **none of the endpoints below are implemented yet.**
 > This document is the agreement the backend and frontend build against. Change it through a pull request so everyone sees the change, and update the **Status** column when an endpoint is merged into `main`.
@@ -37,7 +37,8 @@ States used below:
 | OPEN-2 | How the auth token is sent | **DECIDED** (2026-10-24): JWT Bearer token in the `Authorization` header |
 | C-1, C-4, C-5, C-8 | Replies on resolved tickets, category storage, eligible assignees, assignment permissions | **DEFAULT** (2026-10-25), see [Engineering defaults](#engineering-defaults-d1d7) |
 | D-4, D-5, D-7 | Comment model, shared ticket-access helper, owner of `GET /api/tickets/:id` | **DEFAULT** (2026-10-25), see [Engineering defaults](#engineering-defaults-d1d7) |
-| C-2, C-3, C-6, C-7 | Admin modifying self, token lifetime, token storage, logout | **OPEN** (proposals only) |
+| C-2 | Admin modifying self | **DEFAULT** (2026-10-29), see D-8 |
+| C-3, C-6, C-7 | Token lifetime, token storage, logout | **OPEN**. The proposals are what currently runs (1-day tokens, `sessionStorage`, no server-side logout) so the app works; confirming or changing them is still a team decision. |
 
 > Amended 2026-10-25 (v0.4): this section previously said "Do not implement an option until it is marked DECIDED". Seven open points were blocking the whole agent-workflow module, so the DEFAULT state was added to let implementation proceed while keeping team review explicit.
 
@@ -71,7 +72,7 @@ Option (B), an httpOnly cookie, was not chosen.
 | # | Question | State | Proposal / default |
 | --- | --- | --- | --- |
 | C-1 | Can replies be added to a **resolved** ticket? | **DEFAULT** (D-3) | Yes, no restriction. |
-| C-2 | Can an admin change their **own** role or deactivate themselves? | OPEN | No: returns 400 `CANNOT_MODIFY_SELF`, to avoid locking out the only admin. |
+| C-2 | Can an admin change their **own** role or deactivate themselves? | **DEFAULT** (D-8) | No: returns 400 `CANNOT_MODIFY_SELF`, to avoid locking out the only admin. |
 | C-3 | Token lifetime | OPEN | 1 day (`JWT_EXPIRES_IN=1d`). No refresh tokens. The implementation reads `JWT_EXPIRES_IN` (default `1d`), so the value can change without code changes. |
 | C-4 | Is `category` a reference to the Category collection or a fixed list? | **DEFAULT** (D-6) | Reference to a Category collection. |
 | C-5 | Who can be an assignee? | **DEFAULT** (D-2) | Active users with role `agent` or `admin`. |
@@ -92,6 +93,9 @@ Option (B), an httpOnly cookie, was not chosen.
 | D-5 | Shared ticket access | **One helper**, `backend/src/utils/ticketAccess.js`, owned by the agent-workflow module and used by **every** ticket and comment route, including Swati's. Customer: `createdBy` is the user. Agent: OPEN-1 (unassigned or assigned to them). Admin: all. Any other role: no access. Single-ticket checks run in the contract's order: 400 `INVALID_ID`, then 404, then 403. List and update queries use the same rule as a database filter. | One rule in one file means lists, details, updates and comments cannot disagree. The agent rule is this module's decision (OPEN-1). | Swati, Ayushi |
 | D-6 | Category storage (C-4, Q-1) | **Database collection** `Category` `{ name, isActive }` with a case-insensitive unique name. Tickets reference it. Inactive categories stay on existing tickets, still appear in ticket details and statistics, and can still be used as a queue filter. They cannot be chosen for **new** tickets (enforced by ticket creation). | The handbook requires admins to manage categories; a fixed list would need a code change for every new category. References keep statistics and filters consistent. | Swati |
 | D-7 | Owner of `GET /api/tickets/:id` | The **agent-workflow module** owns it (`backend/src/routes/agentTicket.routes.js`). It is the one detail route for customers, agents and admins, authorized by `ticketAccess.js` (D-5). Swati's ticket router keeps `POST /api/tickets` and `GET /api/tickets/my` and **must not** register `GET /:id`. | The route is pure access control plus a read, and access control lives in this module (D-5). One owner prevents two competing registrations. | Swati, Ayushi |
+
+| D-8 | Admin modifying self (C-2) | `PATCH /api/admin/users/:id/role` and `/status` on **your own** account → **400 `CANNOT_MODIFY_SELF`**. Admins may change other admins. | The C-2 proposal. Refusing self-changes alone does not keep an admin (two admins can demote each other at the same moment), so a change that would leave no active admin is also refused: **409 `LAST_ACTIVE_ADMIN`**. | Swati |
+| D-9 | Additions made while integrating the dashboards (2026-10-29) | All **additive**; no existing field, route or status changed. **(a)** `PATCH /api/auth/me` updates the caller's own `name` (§6). **(b)** Category has an optional `description` (0–200 chars). **(c)** `GET /api/admin/users` items include `ticketCount`. **(d)** `GET /api/admin/stats` adds `byPriority`, `unresolvedByPriority`, `unassigned`, `byAssignee` and an optional `from` date (§11). **(e)** `POST /api/tickets` also accepts the older field name `category` for `categoryId`, and `priority` defaults to `medium` when omitted. **(f)** `GET /api/tickets/my` also accepts the queue's `priority`, `category` and `q` filters. **(g)** Sign-in and sign-up are rate limited per client IP (`429 RATE_LIMITED`, configurable, see README). | The existing admin screens showed category descriptions, per-user ticket counts, per-priority and per-agent figures and report periods; serving them from the API avoids dozens of list requests. (e) keeps clients written before §7 was aligned working. | Swati, Ayushi |
 
 **Router mounting (with D-7):** both ticket routers are mounted at `/api/tickets` in `backend/src/app.js`, **Swati's first**, so that `GET /my` is matched before the agent-workflow router's `GET /:id` (otherwise `my` would be read as an id and return 400 `INVALID_ID`). Admin routes: Swati's `/api/admin/users` and `/api/admin/categories` routers, and the agent-workflow `/api/admin/stats` router, mounted at `/api/admin` with no overlapping paths.
 
@@ -182,7 +186,7 @@ These are the JSON shapes the API returns. They are derived from the brief's pro
 ### Category
 
 ```json
-{ "id": "6718f0c2a1b2c3d4e5f60100", "name": "Account & Login", "isActive": true }
+{ "id": "6718f0c2a1b2c3d4e5f60100", "name": "Account & Login", "description": "Login, passwords, and account access", "isActive": true }
 ```
 
 ### Ticket
@@ -240,25 +244,33 @@ In **list** responses, tickets omit `description` and `statusHistory` to keep pa
 | Method | Route | Allowed | Owner (proposed) | Status |
 | --- | --- | --- | --- | --- |
 | GET | `/api/health` | Public | Tirth | **Implemented** |
-| POST | `/api/auth/register` | Public | Swatismita | Proposed |
-| POST | `/api/auth/login` | Public | Swatismita | Proposed |
-| GET | `/api/auth/me` | Logged in | Swatismita | Proposed |
-| POST | `/api/tickets` | Customer | Swatismita | Proposed |
-| GET | `/api/tickets/my` | Customer | Swatismita | Proposed |
-| GET | `/api/tickets` | Agent\*, Admin | Ayushi | Proposed |
-| GET | `/api/tickets/:id` | Owner, Agent\*, Admin | Ayushi (D-7, DEFAULT) | Proposed |
-| PATCH | `/api/tickets/:id/assign` | Agent\*, Admin | Ayushi | Proposed |
-| PATCH | `/api/tickets/:id/status` | Agent\*, Admin | Ayushi | Proposed |
-| GET | `/api/tickets/:id/comments` | Owner, Agent\*, Admin | Ayushi | Proposed |
-| POST | `/api/tickets/:id/comments` | Owner, Agent\*, Admin | Ayushi | Proposed |
-| GET | `/api/categories` | Logged in | Swatismita | Proposed |
-| GET | `/api/admin/categories` | Admin | Swatismita | Proposed |
-| POST | `/api/admin/categories` | Admin | Swatismita | Proposed |
-| PATCH | `/api/admin/categories/:id` | Admin | Swatismita | Proposed |
-| GET | `/api/admin/users` | Admin | Swatismita | Proposed |
-| PATCH | `/api/admin/users/:id/role` | Admin | Swatismita | Proposed |
-| PATCH | `/api/admin/users/:id/status` | Admin | Swatismita | Proposed |
-| GET | `/api/admin/stats` | Admin | Ayushi | Proposed |
+| POST | `/api/auth/register` | Public | Swatismita | **Implemented** |
+| POST | `/api/auth/login` | Public | Swatismita | **Implemented** |
+| GET | `/api/auth/me` | Logged in | Swatismita | **Implemented** |
+| PATCH | `/api/auth/me` | Logged in (own profile) | Swatismita | **Implemented** (D-9) |
+| POST | `/api/auth/me/password` | Logged in | Swatismita | **Implemented** (§6a) |
+| GET/POST/DELETE | `/api/auth/me/email` | Logged in | Swatismita | **Implemented** (§6a) |
+| POST | `/api/auth/verify-email` | Public | Swatismita | **Implemented** (§6a) |
+| POST | `/api/auth/forgot-password` | Public | Swatismita | **Implemented** (§6a) |
+| POST | `/api/auth/reset-password/check`, `/api/auth/reset-password` | Public | Swatismita | **Implemented** (§6a) |
+| GET | `/api/notifications`, `/api/notifications/unread-count` | Logged in (own) | Tirth | **Implemented** (§12a) |
+| PATCH/POST | `/api/notifications/:id/read`, `/api/notifications/read-all` | Logged in (own) | Tirth | **Implemented** (§12a) |
+| POST | `/api/tickets` | Customer | Swatismita | **Implemented** |
+| GET | `/api/tickets/my` | Customer | Swatismita | **Implemented** |
+| GET | `/api/tickets` | Agent\*, Admin | Ayushi | **Implemented** |
+| GET | `/api/tickets/:id` | Owner, Agent\*, Admin | Ayushi (D-7, DEFAULT) | **Implemented** |
+| PATCH | `/api/tickets/:id/assign` | Agent\*, Admin | Ayushi | **Implemented** |
+| PATCH | `/api/tickets/:id/status` | Agent\*, Admin | Ayushi | **Implemented** |
+| GET | `/api/tickets/:id/comments` | Owner, Agent\*, Admin | Ayushi | **Implemented** |
+| POST | `/api/tickets/:id/comments` | Owner, Agent\*, Admin | Ayushi | **Implemented** |
+| GET | `/api/categories` | Logged in | Swatismita | **Implemented** |
+| GET | `/api/admin/categories` | Admin | Swatismita | **Implemented** |
+| POST | `/api/admin/categories` | Admin | Swatismita | **Implemented** |
+| PATCH | `/api/admin/categories/:id` | Admin | Swatismita | **Implemented** |
+| GET | `/api/admin/users` | Admin | Swatismita | **Implemented** |
+| PATCH | `/api/admin/users/:id/role` | Admin | Swatismita | **Implemented** |
+| PATCH | `/api/admin/users/:id/status` | Admin | Swatismita | **Implemented** |
+| GET | `/api/admin/stats` | Admin | Ayushi | **Implemented** |
 
 Owners follow the team allocation and can be reassigned by agreement. `GET /api/admin/categories` is an addition to the brief so admins can see inactive categories.
 
@@ -288,7 +300,7 @@ Public. Used by the frontend status check and by the deployment host.
 
 > **Transport decided (OPEN-2):** the JWT is returned as `token` in the response body and sent back as `Authorization: Bearer <token>`. The endpoints below are still **proposed, not implemented**, and token lifetime, storage and logout remain open (C-3, C-6, C-7).
 
-### `POST /api/auth/register` — Proposed
+### `POST /api/auth/register` — **Implemented**
 
 Public. Creates a **customer** account.
 
@@ -313,7 +325,7 @@ Request:
 
 Errors: **400** `VALIDATION_ERROR` (including a missing or non-object JSON body) · **400** `INVALID_JSON` · **409** `EMAIL_TAKEN` ("Email is already registered").
 
-### `POST /api/auth/login` — Proposed
+### `POST /api/auth/login` — **Implemented**
 
 Public.
 
@@ -335,7 +347,7 @@ Errors:
 
 Login accepts passwords up to 128 characters (the registration limit before the 72-byte rule), so accounts created earlier can still sign in. A missing or non-object JSON body gives **400** `VALIDATION_ERROR`.
 
-### `GET /api/auth/me` — Proposed
+### `GET /api/auth/me` — **Implemented**
 
 Logged in (any role). Used by the frontend to restore the session on page load.
 
@@ -343,15 +355,32 @@ Logged in (any role). Used by the frontend to restore the session on page load.
 
 Errors: **401** `UNAUTHORIZED` (no/invalid/expired token) · **403** `ACCOUNT_DISABLED`.
 
+### `PATCH /api/auth/me` — **Implemented** (D-9)
+
+Logged in (any role). The caller updates their own profile.
+
+Request: `{ "name": "Asha C. Customer" }` — required, 2–80 characters after trimming.
+
+Only `name` can be changed. `email`, `role`, `isActive`, `password` and any other field are ignored (§2): an email change needs verification and a password change needs its own flow with the current password, neither of which exists yet.
+
+**200**: `{ "user": { …User } }`
+
+Errors: **400** `VALIDATION_ERROR` · **401** · **403** `ACCOUNT_DISABLED`.
+
+### Rate limiting (D-9)
+
+`POST /api/auth/register` and `POST /api/auth/login` each allow `AUTH_RATE_LIMIT_MAX` requests (default 20) per client IP per `AUTH_RATE_LIMIT_WINDOW_MS` (default 15 minutes). Over the limit: **429 `RATE_LIMITED`** with a `Retry-After` header (seconds).
+
 ### Token rules (all protected routes)
 
 Decided (OPEN-2):
 
 - The token is read **only** from the `Authorization` header, in the form `Bearer <token>`. A missing header or any other scheme → **401 `UNAUTHORIZED`**.
 
-Proposed (not yet confirmed):
+Implemented:
 
-- JWT signed with `JWT_SECRET`, payload contains only the user id (`sub`). Lifetime per C-3.
+- JWT signed with `JWT_SECRET`, payload contains only the user id (`sub`) and the user's token version (`ver`). Lifetime per C-3.
+- A token whose `ver` no longer matches the user's stored token version → **401 `UNAUTHORIZED`**. A password change or reset increases the version, which signs the user out everywhere (§6a). Tokens issued before `ver` existed count as version 0.
 - **The role is read from the database on every request, not from the token or the client.** This means a role change or deactivation takes effect immediately.
 - Malformed, expired or wrongly-signed token → **401 `UNAUTHORIZED`**.
 - Token for a user that no longer exists → **401 `UNAUTHORIZED`**.
@@ -360,9 +389,48 @@ Proposed (not yet confirmed):
 
 ---
 
+## 6a. Account security — **Implemented** (2026-10-29)
+
+All of these are rate limited per client IP (`SENSITIVE_RATE_LIMIT_MAX`, default 5 per 15 minutes; **429 `RATE_LIMITED`**). One-time links are 32 random bytes, stored only as a SHA-256 hash, single-use, and expire (reset: `PASSWORD_RESET_TTL_MINUTES`, default 30; email change: `EMAIL_CHANGE_TTL_HOURS`, default 24). Tokens are sent in request **bodies**, never in API URLs, and are never returned or logged. Email links are built from `CLIENT_URL`.
+
+### `POST /api/auth/me/password`
+
+Logged in. Request: `{ "currentPassword": "…", "newPassword": "…" }` (new password: same rules as sign-up, and different from the current one).
+
+**200**: `{ "user": { …User }, "token": "…" }`. The token version increases, so **every other session is signed out**; the caller continues with the returned token. Open password-reset links are cancelled. A notice is emailed.
+
+Errors: **400** `VALIDATION_ERROR` · **400 `INVALID_CURRENT_PASSWORD`** (deliberately not 401, so the client keeps its session) · **401** · **429**.
+
+### `GET / POST / DELETE /api/auth/me/email`
+
+Logged in.
+
+- **POST** `{ "newEmail": "…", "currentPassword": "…" }` → **202** `{ "pendingEmail": "…", "expiresAt": "…" }`. Sends a confirmation link to the new address and a notice to the current one. **The email does not change until the link is opened.** A new request replaces any earlier link. Errors: **400** `VALIDATION_ERROR` (bad or same address) · **400** `INVALID_CURRENT_PASSWORD` · **409** `EMAIL_TAKEN` · **503 `EMAIL_DELIVERY_FAILED`** (nothing stays pending) · **429**.
+- **GET** → `{ "pendingEmail": "…" | null, "expiresAt": "…" | null }`.
+- **DELETE** → cancels the pending change: `{ "pendingEmail": null, "expiresAt": null }`.
+
+### `POST /api/auth/verify-email`
+
+Public (the link may be opened on any device). Request: `{ "token": "…" }`. **200** `{ "email": "…" }`; the old address gets a notice. Errors: **400 `INVALID_OR_EXPIRED_TOKEN`** (unknown, expired, already used, or the account is deactivated) · **409** `EMAIL_TAKEN` (registered by someone else meanwhile; the link is used up) · **429**.
+
+### `POST /api/auth/forgot-password`
+
+Public. Request: `{ "email": "…" }`. **Always 200** with the same `{ "message": "If an account exists for that email, …" }`, whether the account exists, is deactivated or not; the email (if any) is sent after the response. At most one reset email per account per minute. Errors: **400** `VALIDATION_ERROR` (not an email address) · **429**.
+
+### `POST /api/auth/reset-password/check` and `POST /api/auth/reset-password`
+
+Public.
+
+- **check** `{ "token": "…" }` → **200** `{ "valid": true, "expiresAt": "…" }` (does not use the link).
+- **reset** `{ "token": "…", "newPassword": "…" }` → **200** `{ "message": "…" }`. The password is validated **before** the link is used. Signs the user out everywhere; **does not sign them in**.
+
+Errors: **400** `VALIDATION_ERROR` (password rules) · **400 `INVALID_OR_EXPIRED_TOKEN`** · **429**.
+
+---
+
 ## 7. Customer tickets
 
-### `POST /api/tickets` — Proposed
+### `POST /api/tickets` — **Implemented**
 
 Customer only. Agents and admins get **403**.
 
@@ -376,22 +444,22 @@ Request:
 | --- | --- |
 | `subject` | Required string, 5–120 characters |
 | `description` | Required string, 10–5000 characters |
-| `categoryId` | Required, must be an existing **active** category |
-| `priority` | Required, one of `low`, `medium`, `high` (an agent may change it later) |
+| `categoryId` | Required, must be an existing **active** category. A malformed id → **400 `INVALID_ID`**. The older name `category` is accepted as an alias (D-9). |
+| `priority` | Optional, one of `low`, `medium`, `high`; defaults to `medium` (D-9). An agent may change it later. |
 
 The server sets `ticketNumber`, `status: "open"`, `createdBy` (from the token), `assignedTo: null`, and the first `statusHistory` entry.
 
 **201**: `{ "ticket": { …Ticket } }`
 
-Errors: **400** `VALIDATION_ERROR` (missing subject, bad priority, unknown/inactive category, etc.) · **401** · **403** `FORBIDDEN`.
+Errors: **400** `VALIDATION_ERROR` (missing or non-JSON body, missing subject, bad priority, unknown/inactive category, etc.) · **400** `INVALID_ID` (malformed `categoryId`) · **401** · **403** `FORBIDDEN`.
 
 Duplicate submissions: the frontend must disable the submit button while the request is in flight, so a double-click creates one ticket.
 
-### `GET /api/tickets/my` — Proposed
+### `GET /api/tickets/my` — **Implemented**
 
 Customer only. Returns only tickets where `createdBy` is the current user, newest first.
 
-Query (all optional): `status`, `page` (default 1), `limit` (default 20, max 100).
+Query (all optional): `status`, `page` (default 1), `limit` (default 20, max 100). Also accepted (D-9): `priority`, `category`, `q`, with the same rules as the queue (§8). `assignee` is ignored.
 
 **200**:
 
@@ -403,7 +471,7 @@ An empty list is `"tickets": []` with `total: 0`, not an error.
 
 Errors: **400** (bad `status`/`page`/`limit`) · **401** · **403** (non-customer).
 
-### `GET /api/tickets/:id` — Proposed
+### `GET /api/tickets/:id` — **Implemented**
 
 Owner, Agent\*, Admin. Returns the full ticket including `description` and `statusHistory`. Comments are fetched separately.
 
@@ -422,7 +490,7 @@ Errors:
 
 ## 8. Agent and admin ticket workflow
 
-### `GET /api/tickets` — Proposed
+### `GET /api/tickets` — **Implemented**
 
 Agent\*, Admin. The ticket queue. Customers get **403** (they use `/api/tickets/my`).
 
@@ -444,7 +512,7 @@ Sorted newest first. The access policy (OPEN-1) is applied **in the query**, so 
 
 Errors: **400** (invalid filter value) · **401** · **403**.
 
-### `PATCH /api/tickets/:id/assign` — Proposed
+### `PATCH /api/tickets/:id/assign` — **Implemented**
 
 Agent\*, Admin. Assign or unassign an agent, and/or set priority. At least one field is required.
 
@@ -465,7 +533,7 @@ Errors: **400** `VALIDATION_ERROR` (no fields, bad priority, assignee not an act
 
 Fields other than `assignedTo` and `priority` are ignored (Section 2).
 
-### `PATCH /api/tickets/:id/status` — Proposed
+### `PATCH /api/tickets/:id/status` — **Implemented**
 
 Agent\*, Admin. Moves a ticket one step forward.
 
@@ -498,7 +566,7 @@ Errors:
 
 ## 9. Comments (ticket conversation)
 
-### `GET /api/tickets/:id/comments` — Proposed
+### `GET /api/tickets/:id/comments` — **Implemented**
 
 Owner, Agent\*, Admin. Same access rule as `GET /api/tickets/:id`.
 
@@ -512,7 +580,7 @@ No pagination in the first version.
 
 Errors: **400** `INVALID_ID` · **401** · **403** · **404** (ticket not found).
 
-### `POST /api/tickets/:id/comments` — Proposed
+### `POST /api/tickets/:id/comments` — **Implemented**
 
 Owner, Agent\*, Admin.
 
@@ -536,33 +604,33 @@ Errors: **400** `VALIDATION_ERROR` / `INVALID_ID` · **401** · **403** · **404
 
 ## 10. Categories
 
-### `GET /api/categories` — Proposed
+### `GET /api/categories` — **Implemented**
 
 Logged in (any role). Active categories only, sorted by name. Used by the ticket form and filters.
 
 **200**: `{ "categories": [ { …Category } ] }`
 
-### `GET /api/admin/categories` — Proposed
+### `GET /api/admin/categories` — **Implemented**
 
 Admin. All categories including inactive ones.
 
 **200**: `{ "categories": [ { …Category } ] }`
 
-### `POST /api/admin/categories` — Proposed
+### `POST /api/admin/categories` — **Implemented**
 
 Admin.
 
-Request: `{ "name": "Billing" }` — required, 2–50 characters, unique (case-insensitive).
+Request: `{ "name": "Billing", "description": "Invoices and refunds" }` — `name` required, 2–50 characters, unique (case-insensitive, including inactive categories); `description` optional, at most 200 characters (D-9). New categories are active.
 
 **201**: `{ "category": { …Category } }`
 
 Errors: **400** `VALIDATION_ERROR` · **401** · **403** · **409** `CATEGORY_EXISTS`.
 
-### `PATCH /api/admin/categories/:id` — Proposed
+### `PATCH /api/admin/categories/:id` — **Implemented**
 
 Admin. Rename and/or activate/deactivate. At least one field required.
 
-Request: `{ "name": "Billing & Payments", "isActive": false }`
+Request: `{ "name": "Billing & Payments", "description": "…", "isActive": false }` — any of the three; `isActive` must be a boolean.
 
 Deactivated categories stay on existing tickets but cannot be chosen for new ones.
 
@@ -576,21 +644,23 @@ Errors: **400** · **401** · **403** · **404** · **409** `CATEGORY_EXISTS`.
 
 All routes under `/api/admin/*` return **403** for customers and agents.
 
-### `GET /api/admin/users` — Proposed
+### `GET /api/admin/users` — **Implemented**
 
 Query (optional): `role`, `isActive` (`true`/`false`), `q` (name or email search), `page`, `limit`.
 
-**200**: `{ "users": [ { …User } ], "page": 1, "limit": 20, "total": 12 }`
+**200**: `{ "users": [ { …User, "ticketCount": 3 } ], "page": 1, "limit": 20, "total": 12 }`, newest first. `ticketCount` (D-9) is the number of tickets a customer created, or the number assigned to an agent/admin.
 
-### `PATCH /api/admin/users/:id/role` — Proposed
+Errors: **400** `VALIDATION_ERROR` (bad `role`, `isActive`, `page`, `limit`, or `q` over 100 characters) · **401** · **403**.
+
+### `PATCH /api/admin/users/:id/role` — **Implemented**
 
 Request: `{ "role": "agent" }` — one of `customer`, `agent`, `admin`.
 
 **200**: `{ "user": { …User } }`
 
-Errors: **400** `VALIDATION_ERROR` · **400** `CANNOT_MODIFY_SELF` (C-2) · **401** · **403** · **404**.
+Errors: **400** `VALIDATION_ERROR` · **400** `CANNOT_MODIFY_SELF` (C-2) · **401** · **403** · **404** · **409** `LAST_ACTIVE_ADMIN` (the change would leave no active admin; nothing is changed).
 
-### `PATCH /api/admin/users/:id/status` — Proposed
+### `PATCH /api/admin/users/:id/status` — **Implemented**
 
 Request: `{ "isActive": false }` — boolean.
 
@@ -600,7 +670,7 @@ A deactivated user cannot log in, and their existing token is refused on the nex
 
 Errors: same as the role endpoint.
 
-### `GET /api/admin/stats` — Proposed
+### `GET /api/admin/stats` — **Implemented**
 
 Ticket volume for the admin dashboard.
 
@@ -619,6 +689,44 @@ Ticket volume for the admin dashboard.
 
 `byStatus` always contains all three keys, with `0` where there are no tickets.
 
+Added for the admin dashboard (D-9), after the fields above:
+
+| Field | Meaning |
+| --- | --- |
+| `byPriority` | `{ "low": n, "medium": n, "high": n }` for all tickets |
+| `unresolvedByPriority` | The same for tickets that are not resolved |
+| `unassigned` | Unresolved tickets with no assignee |
+| `byAssignee` | `[ { "assignee": UserSummary, "total": n, "byStatus": { … } } ]`, busiest first; only assigned tickets |
+
+Query (optional): `from` — an ISO 8601 date (`2026-10-01`, meaning UTC midnight) or date-time with `Z` or an offset (`2026-10-01T00:00:00Z`); every figure then counts only tickets created at or after it. Anything else, including impossible dates such as `2026-02-31`, → **400** `VALIDATION_ERROR`.
+
+---
+
+## 12a. Notifications — **Implemented** (2026-10-29)
+
+In-app notifications, stored per recipient. Every route acts on the **signed-in user's own** notifications only; the recipient never comes from the client.
+
+**Notification**: `{ "id", "type", "title", "message", "ticket": { "id", "ticketNumber" } | null, "readAt": null | "…", "createdAt" }`. `ticket` is `null` when the reader can no longer open that ticket (e.g. it was reassigned away from them) or it no longer exists.
+
+| Type | Created when | Recipients (never the person who acted; only active users who can access the ticket) |
+| --- | --- | --- |
+| `ticket_created` | A customer raises a ticket | Every active agent and admin |
+| `ticket_assigned` | The assignee changes to someone | The new assignee; the customer ("is being handled") |
+| `priority_changed` | Only the priority changes | Customer and assignee |
+| `status_changed` / `ticket_resolved` | Status moves forward (`ticket_resolved` when it becomes resolved) | Customer and assignee |
+| `comment_added` | A reply is posted | Customer and assignee |
+
+One action gives each recipient at most one notification (an assignment that also changes the priority is one `ticket_assigned`). A failure to store notifications never fails the ticket action. Reopening is not supported (D-3), so there is no "reopened" notification.
+
+| Method | Route | Response |
+| --- | --- | --- |
+| GET | `/api/notifications` | Query: `unread` (`true`/`false`), `page`, `limit` (default 20, max 50). Newest first. → `{ "notifications": [ … ], "page", "limit", "total", "unreadCount" }` |
+| GET | `/api/notifications/unread-count` | `{ "unreadCount": n }` |
+| PATCH | `/api/notifications/:id/read` | `{ "notification": { … }, "unreadCount": n }`; marking twice keeps the first `readAt`. Another user's id → **404** (existence not revealed) |
+| POST | `/api/notifications/read-all` | `{ "updated": n, "unreadCount": 0 }` |
+
+Errors: **400** `VALIDATION_ERROR` / `INVALID_ID` · **401** · **404**.
+
 ---
 
 ## 12. Error codes
@@ -628,18 +736,23 @@ Ticket volume for the admin dashboard.
 | `VALIDATION_ERROR` | 400 | Missing or invalid input; Mongoose validation errors | **Yes** (helper + mapping) |
 | `INVALID_JSON` | 400 | Malformed JSON body | **Yes** |
 | `INVALID_ID` | 400 | Path/body id is not a valid ObjectId | **Yes** (Mongoose CastError mapping) |
-| `INVALID_STATUS_TRANSITION` | 400 | Status change not allowed | Proposed |
-| `CANNOT_MODIFY_SELF` | 400 | Admin changing own role/status | Proposed |
+| `INVALID_STATUS_TRANSITION` | 400 | Status change not allowed | **Yes** |
+| `CANNOT_MODIFY_SELF` | 400 | Admin changing own role/status | **Yes** |
 | `UNAUTHORIZED` | 401 | No/invalid/expired token | **Yes** (helper) |
-| `INVALID_CREDENTIALS` | 401 | Wrong email or password | Proposed |
+| `INVALID_CREDENTIALS` | 401 | Wrong email or password | **Yes** |
 | `FORBIDDEN` | 403 | Wrong role, not owner, outside access policy | **Yes** (helper) |
-| `ACCOUNT_DISABLED` | 403 | Deactivated account | Proposed |
+| `ACCOUNT_DISABLED` | 403 | Deactivated account | **Yes** |
 | `NOT_FOUND` | 404 | Unknown route or resource | **Yes** |
 | `CONFLICT` | 409 | Generic duplicate | **Yes** (helper) |
 | `DUPLICATE` | 409 | MongoDB duplicate-key error not handled explicitly | **Yes** (mapping) |
-| `EMAIL_TAKEN` | 409 | Register with existing email | Proposed |
-| `CATEGORY_EXISTS` | 409 | Duplicate category name | Proposed |
+| `EMAIL_TAKEN` | 409 | Register with existing email | **Yes** |
+| `CATEGORY_EXISTS` | 409 | Duplicate category name | **Yes** |
+| `LAST_ACTIVE_ADMIN` | 409 | Role/status change would leave no active admin (§11) | **Yes** |
+| `INVALID_CURRENT_PASSWORD` | 400 | Wrong current password in a security change (§6a) | **Yes** |
+| `INVALID_OR_EXPIRED_TOKEN` | 400 | Reset or email-confirmation link unknown, expired or used (§6a) | **Yes** |
 | `PAYLOAD_TOO_LARGE` | 413 | Body over 100 kB | **Yes** |
+| `EMAIL_DELIVERY_FAILED` | 503 | The confirmation email for an email change could not be sent (§6a) | **Yes** |
+| `RATE_LIMITED` | 429 | Too many sign-in or sign-up attempts from one client (D-9); sent with `Retry-After` | **Yes** |
 | `INTERNAL_ERROR` | 500 | Anything unexpected | **Yes** |
 
 Modules should throw the specific code where one is listed (e.g. `ApiError.conflict('Email is already registered', 'EMAIL_TAKEN')`) rather than relying on the generic `DUPLICATE` mapping.
@@ -655,3 +768,5 @@ Modules should throw the specific code where one is listed (e.g. `ApiError.confl
 | 2026-10-25 | v0.3: OPEN-1 DECIDED (option (b): unassigned tickets + tickets assigned to that agent, confirmed by Ayushi). OPEN-2 unchanged. Added C-8 (may an agent assign to another agent) as an open point. | Tirth Vaghela |
 | 2026-10-25 | v0.4: added the DEFAULT state and amended the "do not implement until DECIDED" rule. Engineering defaults D-1 to D-7 (C-1, C-4, C-5, C-8, comment model, shared access helper, owner of `GET /api/tickets/:id`) and the router mounting order. Pending review by Ayushi and Swati. C-2, C-3, C-6, C-7 stay OPEN. | Tirth Vaghela |
 | 2026-10-26 | v0.5: §6 auth: password limit is 72 **bytes** (rejected, not shortened); login never reveals unknown or deactivated accounts before the password is verified; missing/non-object bodies give 400. Responses follow §6 (`{ user, token }`, 409 `EMAIL_TAKEN`, 401 `INVALID_CREDENTIALS`); `GET /api/auth/me` implemented. | Tirth Vaghela |
+| 2026-10-29 | v0.6: every endpoint in §4 implemented and tested. §7 customer tickets aligned with this contract (`{ ticket }`, `{ tickets, page, limit, total }`, error envelope, `categoryId`, filters). §10 admin categories and §11 admin users implemented. C-2 → DEFAULT D-8 (`CANNOT_MODIFY_SELF`). D-9 records the additive extensions (profile name update, category description, `ticketCount`, extra stats and `from`, `category` alias and default priority, `/my` filters, sign-in rate limiting with `429 RATE_LIMITED`). C-3, C-6, C-7 stay OPEN. Pending review by Swati and Ayushi. | Tirth Vaghela |
+| 2026-10-29 | v0.7: §6a account security (password change, email change with confirmation, forgot/reset password) and §12a in-app notifications. Tokens carry a version (`ver`) so a password change or reset signs the user out everywhere (partly answers C-7). New error codes `INVALID_CURRENT_PASSWORD`, `INVALID_OR_EXPIRED_TOKEN`, `EMAIL_DELIVERY_FAILED`. Review fixes: §11 `409 LAST_ACTIVE_ADMIN` (D-8 no longer relies on self-protection alone); stats `from` accepts ISO 8601 only. | Tirth Vaghela |

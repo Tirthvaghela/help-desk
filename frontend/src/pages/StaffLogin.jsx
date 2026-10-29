@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Navigate, useNavigate } from "react-router";
+import { Link, Navigate, useNavigate } from "react-router";
 import { useAuth } from "../auth/useAuth.js";
 import { dashboardPathFor, STAFF_ONLY_MESSAGE, STAFF_ROLES } from "../auth/session.js";
 
@@ -16,6 +16,7 @@ function loginErrorMessage(error) {
     case "VALIDATION_ERROR":
     case "NETWORK_ERROR":
     case "TOKEN_STORAGE_FAILED":
+    case "RATE_LIMITED":
       return error.message;
     default:
       return "Sign-in failed. Please try again.";
@@ -217,6 +218,15 @@ export default function StaffLogin() {
                   {showPassword ? "Hide" : "Show"}
                 </button>
               </div>
+
+              <p className="mt-2 text-right text-[12px]">
+                <Link
+                  to="/forgot-password"
+                  className="font-semibold text-[#168461] underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#168461]/40"
+                >
+                  Forgot password?
+                </Link>
+              </p>
             </div>
 
             {/* ERROR */}

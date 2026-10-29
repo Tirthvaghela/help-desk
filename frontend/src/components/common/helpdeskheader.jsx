@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { useAuth } from "../../auth/useAuth.js";
+import NotificationBell from "./NotificationBell.jsx";
 
 // Up to two initials from a name, e.g. "Asha Customer" → "AC".
 function initialsOf(name = "") {
@@ -21,14 +22,6 @@ export default function HelpDeskHeader({
   const { user, logout } = useAuth();
 
   const [showProfile, setShowProfile] = useState(false);
-  const [showNotifications, setShowNotifications] = useState(false);
-
-  // Notifications will be populated after backend integration.
-  const [notifications] = useState([]);
-
-  const hasUnreadNotifications = notifications.some(
-    (notification) => !notification.isRead
-  );
 
   const isAdmin = role === "admin";
 
@@ -42,7 +35,6 @@ export default function HelpDeskHeader({
 
   const handleSearch = () => {
     setShowProfile(false);
-    setShowNotifications(false);
 
     onNavigate?.(isAdmin ? "Tickets" : "Inbox");
   };
@@ -55,7 +47,6 @@ export default function HelpDeskHeader({
     onNavigate?.(item);
 
     setShowProfile(false);
-    setShowNotifications(false);
   };
 
   // ==============================
@@ -66,7 +57,6 @@ export default function HelpDeskHeader({
     logout();
 
     setShowProfile(false);
-    setShowNotifications(false);
 
     navigate("/staff/login", { replace: true });
   };
@@ -155,63 +145,7 @@ export default function HelpDeskHeader({
             NOTIFICATIONS
         ============================== */}
 
-        <div className="relative">
-          <button
-            type="button"
-            aria-label="Notifications"
-            aria-expanded={showNotifications}
-            onClick={() => {
-              setShowNotifications((previous) => !previous);
-              setShowProfile(false);
-            }}
-            className="relative flex h-9 w-9 items-center justify-center rounded-full border border-white/50 bg-white/10 text-[#243b35] transition hover:bg-white/60 sm:h-10 sm:w-10"
-          >
-            <svg
-              width="19"
-              height="19"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.7"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" />
-              <path d="M10 21h4" />
-            </svg>
-
-            {hasUnreadNotifications && (
-              <span className="absolute right-[8px] top-[6px] h-[6px] w-[6px] rounded-full bg-[#e46c6c] ring-2 ring-[#d6f0e3] sm:right-[9px] sm:top-[7px]" />
-            )}
-          </button>
-
-          {showNotifications && (
-            <div className="absolute right-[-52px] top-12 z-50 w-[min(280px,calc(100vw-48px))] rounded-[20px] border border-white/80 bg-white/95 p-5 shadow-xl backdrop-blur-xl sm:right-0 sm:top-14 sm:w-72">
-              <h3 className="text-sm font-semibold text-[#1c302b]">
-                Notifications
-              </h3>
-
-              {notifications.length === 0 ? (
-                <p className="mt-2 text-sm text-[#687c75]">
-                  You're all caught up. No new notifications.
-                </p>
-              ) : (
-                <div className="mt-3 space-y-3">
-                  {notifications.map((notification) => (
-                    <div
-                      key={notification.id}
-                      className="rounded-xl bg-[#edf7f1] p-3"
-                    >
-                      <p className="text-[12px] text-[#355747]">
-                        {notification.message}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
+        <NotificationBell buttonClassName="h-9 w-9 rounded-full border border-white/50 bg-white/10 text-[#243b35] transition hover:bg-white/60 sm:h-10 sm:w-10" />
 
         {/* ==============================
             PROFILE
@@ -224,8 +158,7 @@ export default function HelpDeskHeader({
             aria-expanded={showProfile}
             onClick={() => {
               setShowProfile((previous) => !previous);
-              setShowNotifications(false);
-            }}
+                      }}
             className="flex h-10 w-10 items-center justify-center rounded-full border border-white/50 bg-[#c6f0d9] text-[12px] font-semibold text-[#155d45] transition hover:bg-[#b2e9cc] sm:h-11 sm:w-11 sm:text-[13px]"
           >
             {initialsOf(user?.name) || "?"}
@@ -246,6 +179,15 @@ export default function HelpDeskHeader({
               </span>
 
               <div className="my-4 border-t border-slate-100" />
+
+              <Link
+                to="/staff/account"
+                onClick={() => setShowProfile(false)}
+                className="mb-1 block w-full rounded-xl px-3 py-2 text-left text-sm font-medium text-[#2c5a47] transition hover:bg-[#edf7f1]"
+              >
+                Account settings
+              </Link>
+
 
               <button
                 type="button"

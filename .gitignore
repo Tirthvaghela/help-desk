@@ -22,3 +22,6 @@ npm-debug.log*
 .idea/
 .DS_Store
 Thumbs.db
+
+# Development email outbox (EMAIL_TRANSPORT=outbox): contains one-time links
+backend/.outbox/

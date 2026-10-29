@@ -61,6 +61,18 @@ export function sessionEndedNotice(error) {
   return null;
 }
 
+// What an API error means for the session, given the token its request was sent with:
+//   'end'    the backend rejected the current session (expired, invalid or deactivated)
+//   'stale'  it rejected a request sent with an older token, from a session that has since
+//            ended or been replaced (password change, sign-out, another sign-in); the
+//            current session is unaffected and must not be ended by it
+//   null     not a session problem; the page handles the error
+// Requests sent without a token are never 'stale'.
+export function sessionRejection(error, sentWith, current = readToken()) {
+  if (!sessionEndedNotice(error)) return null;
+  return sentWith && sentWith !== current ? 'stale' : 'end';
+}
+
 export const STAFF_ROLES = Object.freeze(['agent', 'admin']);
 
 const DASHBOARD_PATHS = Object.freeze({
@@ -72,6 +84,16 @@ const DASHBOARD_PATHS = Object.freeze({
 export function dashboardPathFor(role) {
   return DASHBOARD_PATHS[role] ?? null;
 }
+
+export const CUSTOMER_HOME = '/tickets';
+
+// Where a signed-in user of any role belongs: the staff dashboard or the customer portal.
+export function homePathFor(role) {
+  return role === 'customer' ? CUSTOMER_HOME : dashboardPathFor(role);
+}
+
+export const CUSTOMER_ONLY_MESSAGE =
+  'This sign-in is for customers. Support staff should use the staff sign-in.';
 
 export const STAFF_ONLY_MESSAGE =
   'This sign-in is for authorized support staff. Customer accounts cannot access the staff workspace.';

@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { apiRequest } from '../api/client.js';
+import { apiRequest, requestTokenOf } from '../api/client.js';
 import { AuthContext } from './useAuth.js';
 import {
   clearToken,
   readToken,
   sessionEndedNotice,
-  STAFF_ONLY_MESSAGE,
+  sessionRejection,
   storeToken,
 } from './session.js';
 
@@ -58,17 +58,17 @@ export default function AuthProvider({ children }) {
     restoreSession();
   }, [restoreSession]);
 
-  // Signs in with POST /api/auth/login. If `allowedRoles` is given and the backend returns a
-  // different role, nothing is stored and the call fails with code ROLE_NOT_ALLOWED.
-  const login = useCallback(async (email, password, { allowedRoles } = {}) => {
-    const result = await apiRequest('/api/auth/login', { method: 'POST', body: { email, password } });
+  // Starts a session from a { user, token } login or register response. If `allowedRoles` is
+  // given and the backend returned a different role, nothing is stored and the call fails
+  // with code ROLE_NOT_ALLOWED (each sign-in page shows its own message for it).
+  const startSession = useCallback((result, allowedRoles) => {
     if (!result?.token || !result?.user) {
       throw Object.assign(new Error('Unexpected response from the server. Please try again.'), {
         code: 'BAD_RESPONSE',
       });
     }
     if (allowedRoles && !allowedRoles.includes(result.user.role)) {
-      throw Object.assign(new Error(STAFF_ONLY_MESSAGE), { code: 'ROLE_NOT_ALLOWED' });
+      throw Object.assign(new Error('This account cannot sign in here.'), { code: 'ROLE_NOT_ALLOWED' });
     }
 
     latestCheck.current += 1;
@@ -88,6 +88,75 @@ export default function AuthProvider({ children }) {
     return result.user;
   }, []);
 
+  // Signs in with POST /api/auth/login.
+  const login = useCallback(
+    async (email, password, { allowedRoles } = {}) => {
+      const result = await apiRequest('/api/auth/login', { method: 'POST', body: { email, password } });
+      return startSession(result, allowedRoles);
+    },
+    [startSession],
+  );
+
+  // Public sign-up with POST /api/auth/register. The backend always creates a customer.
+  const register = useCallback(
+    async (name, email, password) => {
+      const result = await apiRequest('/api/auth/register', {
+        method: 'POST',
+        body: { name, email, password },
+      });
+      return startSession(result, ['customer']);
+    },
+    [startSession],
+  );
+
+  // Updates the signed-in user's own name with PATCH /api/auth/me and shows the saved
+  // value everywhere (header, profile). Only the name is editable (contract §6).
+  // The answer is applied only to the session that sent the request, never to one started
+  // since (sign-out, or another account signed in meanwhile).
+  const updateProfile = useCallback(async ({ name }) => {
+    const token = readToken();
+    const result = await apiRequest('/api/auth/me', { method: 'PATCH', token, body: { name } });
+    setSession((previous) =>
+      previous.status === 'authenticated' && previous.token === token ? { ...previous, user: result.user } : previous,
+    );
+    return result.user;
+  }, []);
+
+  // Changes the signed-in user's password (contract §6a). The backend signs out every
+  // other session and returns a new token for this one, which replaces the stored token.
+  // If this session ended while the request was running (signed out, or rejected by another
+  // request), the new token is not used: signing out must not be undone by a late answer.
+  const changePassword = useCallback(
+    async ({ currentPassword, newPassword }) => {
+      const token = readToken();
+      const result = await apiRequest('/api/auth/me/password', {
+        method: 'POST',
+        token,
+        body: { currentPassword, newPassword },
+      });
+      if (!token || readToken() !== token) return result.user;
+      return startSession(result);
+    },
+    [startSession],
+  );
+
+  // For pages that call the API: if `error` shows the backend rejected the token (expired,
+  // invalid or deactivated), signs out with a notice and returns true. The route guard then
+  // sends the user to sign in. Other errors are left to the page.
+  // A rejection of a request sent with an older token (a late answer from before a password
+  // change, sign-out or new sign-in) is also "handled" (true) but ends nothing: that session
+  // is already over, and the current one was not the one rejected.
+  const endSessionIfRejected = useCallback((error) => {
+    const rejection = sessionRejection(error, requestTokenOf(error));
+    if (!rejection) return false;
+    if (rejection === 'stale') return true;
+    latestCheck.current += 1;
+    clearToken();
+    setNotice(sessionEndedNotice(error));
+    setSession(SIGNED_OUT);
+    return true;
+  }, []);
+
   // Ends the session in this browser. Tokens are not revoked server-side (contract C-7 is open),
   // so a copied token stays valid until it expires.
   const logout = useCallback(() => {
@@ -98,8 +167,8 @@ export default function AuthProvider({ children }) {
   }, []);
 
   const value = useMemo(
-    () => ({ ...session, notice, login, logout, restoreSession }),
-    [session, notice, login, logout, restoreSession],
+    () => ({ ...session, notice, login, register, logout, restoreSession, endSessionIfRejected, updateProfile, changePassword }),
+    [session, notice, login, register, logout, restoreSession, endSessionIfRejected, updateProfile, changePassword],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

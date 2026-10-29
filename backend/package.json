@@ -8,7 +8,10 @@
   "scripts": {
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
-    "test": "node --import ./test/setup.js --test --test-concurrency=1 test/*.test.js"
+    "test": "node --import ./test/setup.js --test --test-concurrency=1 test/*.test.js",
+    "seed:categories": "node scripts/seed-categories.js",
+    "check:categories": "node scripts/check-categories.js",
+    "create:staff": "node scripts/create-staff.js"
   },
   "engines": {
     "node": ">=22.12"

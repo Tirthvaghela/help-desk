@@ -1,39 +1,11 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
+import { useAuth } from "../../auth/useAuth.js";
+import { useApiData } from "../../api/useApiData.js";
+import { adminErrorMessage, createCategory, getStats, listAllCategories, updateCategory } from "../../api/admin.js";
 
-// ========================================
-// SAMPLE CATEGORIES
-// ========================================
-
-const initialCategories = [
-  {
-    id: 1,
-    name: "Account",
-    description: "Login, passwords, and account access",
-    tickets: 3,
-    active: true,
-  },
-  {
-    id: 2,
-    name: "Billing",
-    description: "Invoices, payments, refunds, and subscriptions",
-    tickets: 1,
-    active: true,
-  },
-  {
-    id: 3,
-    name: "Technical",
-    description: "Application errors, bugs, and technical issues",
-    tickets: 1,
-    active: true,
-  },
-  {
-    id: 4,
-    name: "General Inquiry",
-    description: "General questions and customer assistance",
-    tickets: 0,
-    active: true,
-  },
-];
+const NAME_MIN = 2;
+const NAME_MAX = 50;
+const DESCRIPTION_MAX = 200;
 
 // ========================================
 // STYLES
@@ -58,12 +30,27 @@ const inputStyle = {
   outlineColor: "#399d79",
 };
 
+function nameError(name) {
+  if (!name) return "Please enter a category name.";
+  if (name.length < NAME_MIN) return `Category names need at least ${NAME_MIN} characters.`;
+  if (name.length > NAME_MAX) return `Category names can be at most ${NAME_MAX} characters.`;
+  return null;
+}
+
+// Categories with the number of tickets in each (from the statistics endpoint).
+async function loadCategories(token) {
+  const [categories, stats] = await Promise.all([listAllCategories(token), getStats(token)]);
+  const counts = new Map(stats.byCategory.map((row) => [row.category.id, row.count]));
+  return categories.map((category) => ({ ...category, tickets: counts.get(category.id) ?? 0 }));
+}
+
 // ========================================
 // MAIN COMPONENT
 // ========================================
 
 export default function AdminCategories() {
-  const [categories, setCategories] = useState(initialCategories);
+  const { token, endSessionIfRejected } = useAuth();
+  const { data: categories, status, error: loadError, reload, setData } = useApiData(loadCategories);
 
   const [newCategory, setNewCategory] = useState("");
   const [newDescription, setNewDescription] = useState("");
@@ -71,7 +58,27 @@ export default function AdminCategories() {
   const [editingId, setEditingId] = useState(null);
   const [editingName, setEditingName] = useState("");
 
+  const [busy, setBusy] = useState(null); // "add" | category id
   const [error, setError] = useState("");
+  const [rowError, setRowError] = useState({ id: null, message: "" });
+
+  // Replaces one category with the server's saved version, keeping its ticket count.
+  const applySaved = (saved) =>
+    setData((previous) =>
+      previous.map((category) => (category.id === saved.id ? { ...category, ...saved } : category)),
+    );
+
+  async function run(key, action, onError) {
+    if (busy) return;
+    setBusy(key);
+    try {
+      await action();
+    } catch (saveError) {
+      if (!endSessionIfRejected(saveError)) onError(adminErrorMessage(saveError, "The change could not be saved."));
+    } finally {
+      setBusy(null);
+    }
+  }
 
   // ========================================
   // ADD CATEGORY
@@ -83,34 +90,25 @@ export default function AdminCategories() {
     const name = newCategory.trim();
     const description = newDescription.trim();
 
-    if (!name) {
-      setError("Please enter a category name.");
+    const invalid = nameError(name) ?? (description.length > DESCRIPTION_MAX ? `Descriptions can be at most ${DESCRIPTION_MAX} characters.` : null);
+    if (invalid) {
+      setError(invalid);
       return;
     }
 
-    const alreadyExists = categories.some(
-      (category) =>
-        category.name.toLowerCase() === name.toLowerCase()
-    );
-
-    if (alreadyExists) {
-      setError("This category already exists.");
-      return;
-    }
-
-    const category = {
-      id: Date.now(),
-      name,
-      description: description || "No description provided",
-      tickets: 0,
-      active: true,
-    };
-
-    setCategories((previous) => [...previous, category]);
-
-    setNewCategory("");
-    setNewDescription("");
     setError("");
+    run(
+      "add",
+      async () => {
+        const created = await createCategory(token, { name, description });
+        setData((previous) =>
+          [...previous, { ...created, tickets: 0 }].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" })),
+        );
+        setNewCategory("");
+        setNewDescription("");
+      },
+      setError,
+    );
   }
 
   // ========================================
@@ -120,58 +118,44 @@ export default function AdminCategories() {
   function startRename(category) {
     setEditingId(category.id);
     setEditingName(category.name);
-    setError("");
+    setRowError({ id: null, message: "" });
   }
 
   function saveRename(id) {
     const name = editingName.trim();
-
-    if (!name) {
-      setError("Category name cannot be empty.");
+    const invalid = nameError(name);
+    if (invalid) {
+      setRowError({ id, message: invalid });
       return;
     }
 
-    const duplicate = categories.some(
-      (category) =>
-        category.id !== id &&
-        category.name.toLowerCase() === name.toLowerCase()
+    run(
+      id,
+      async () => {
+        applySaved(await updateCategory(token, id, { name }));
+        setEditingId(null);
+        setEditingName("");
+        setRowError({ id: null, message: "" });
+      },
+      (message) => setRowError({ id, message }),
     );
-
-    if (duplicate) {
-      setError("A category with this name already exists.");
-      return;
-    }
-
-    setCategories((previous) =>
-      previous.map((category) =>
-        category.id === id
-          ? { ...category, name }
-          : category
-      )
-    );
-
-    setEditingId(null);
-    setEditingName("");
-    setError("");
   }
 
   function cancelRename() {
     setEditingId(null);
     setEditingName("");
-    setError("");
+    setRowError({ id: null, message: "" });
   }
 
   // ========================================
   // ACTIVATE / DEACTIVATE
   // ========================================
 
-  function toggleCategory(id) {
-    setCategories((previous) =>
-      previous.map((category) =>
-        category.id === id
-          ? { ...category, active: !category.active }
-          : category
-      )
+  function toggleCategory(category) {
+    run(
+      category.id,
+      async () => applySaved(await updateCategory(token, category.id, { isActive: !category.isActive })),
+      (message) => setRowError({ id: category.id, message }),
     );
   }
 
@@ -184,6 +168,7 @@ export default function AdminCategories() {
 
       <form
         onSubmit={handleAddCategory}
+        noValidate
         style={{
           ...glassStyle,
           padding: "22px",
@@ -214,10 +199,14 @@ export default function AdminCategories() {
               type="text"
               placeholder="e.g. Data & Privacy"
               value={newCategory}
+              maxLength={NAME_MAX + 10}
               onChange={(event) => {
                 setNewCategory(event.target.value);
                 setError("");
               }}
+              disabled={busy === "add"}
+              aria-invalid={Boolean(error)}
+              aria-describedby={error ? "category-add-error" : undefined}
               style={inputStyle}
             />
           </div>
@@ -237,9 +226,11 @@ export default function AdminCategories() {
               type="text"
               placeholder="Briefly describe this category"
               value={newDescription}
+              maxLength={DESCRIPTION_MAX}
               onChange={(event) =>
                 setNewDescription(event.target.value)
               }
+              disabled={busy === "add"}
               style={inputStyle}
             />
           </div>
@@ -248,14 +239,16 @@ export default function AdminCategories() {
 
           <button
             type="submit"
-            className="rounded-xl bg-emerald-700 px-6 py-3 text-sm font-semibold text-white transition hover:bg-emerald-800"
+            disabled={busy === "add"}
+            aria-busy={busy === "add"}
+            className="rounded-xl bg-emerald-700 px-6 py-3 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-70"
           >
-            + Add Category
+            {busy === "add" ? "Adding…" : "+ Add Category"}
           </button>
         </div>
 
-        {error && editingId === null && (
-          <p className="mt-3 text-xs font-medium text-red-600">
+        {error && (
+          <p id="category-add-error" role="alert" className="mt-3 text-xs font-medium text-red-600">
             {error}
           </p>
         )}
@@ -283,14 +276,31 @@ export default function AdminCategories() {
           </div>
 
           <span className="rounded-full bg-emerald-100 px-3 py-1.5 text-xs font-semibold text-emerald-800">
-            {categories.length} Categories
+            {categories ? `${categories.length} Categories` : "…"}
           </span>
         </div>
 
         {/* CATEGORY ROWS */}
 
+        {status === "error" && !categories && (
+          <p role="alert" className="px-5 py-6 text-sm text-red-700">
+            {adminErrorMessage(loadError, "Categories could not be loaded.")}{" "}
+            <button type="button" onClick={reload} className="font-semibold underline">Try again</button>
+          </p>
+        )}
+
+        {!categories && status === "loading" && (
+          <p role="status" className="px-5 py-6 text-sm text-slate-500">Loading categories…</p>
+        )}
+
+        {categories?.length === 0 && (
+          <p className="px-5 py-8 text-center text-sm text-slate-500">
+            No categories yet. Customers need at least one active category to raise a ticket.
+          </p>
+        )}
+
         <div className="divide-y divide-white/70">
-          {categories.map((category) => (
+          {categories?.map((category) => (
             <div
               key={category.id}
               className="flex flex-col gap-4 px-5 py-5 transition hover:bg-white/30 lg:flex-row lg:items-center lg:justify-between"
@@ -311,9 +321,10 @@ export default function AdminCategories() {
                       id={`rename-${category.id}`}
                       type="text"
                       value={editingName}
+                      maxLength={NAME_MAX + 10}
                       onChange={(event) => {
                         setEditingName(event.target.value);
-                        setError("");
+                        setRowError({ id: null, message: "" });
                       }}
                       onKeyDown={(event) => {
                         if (event.key === "Enter") {
@@ -325,26 +336,27 @@ export default function AdminCategories() {
                           cancelRename();
                         }
                       }}
+                      disabled={busy === category.id}
                       style={inputStyle}
                       autoFocus
                     />
-
-                    {error && (
-                      <p className="mt-2 text-xs text-red-600">
-                        {error}
-                      </p>
-                    )}
                   </div>
                 ) : (
                   <>
-                    <h3 className="text-sm font-semibold text-emerald-950">
+                    <h3 className="break-words text-sm font-semibold text-emerald-950">
                       {category.name}
                     </h3>
 
                     <p className="mt-1 text-xs leading-relaxed text-slate-500">
-                      {category.description}
+                      {category.description || "No description provided"}
                     </p>
                   </>
+                )}
+
+                {rowError.id === category.id && rowError.message && (
+                  <p role="alert" className="mt-2 text-xs text-red-600">
+                    {rowError.message}
+                  </p>
                 )}
               </div>
 
@@ -360,20 +372,20 @@ export default function AdminCategories() {
               <div className="w-full lg:w-28">
                 <span
                   className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-semibold ${
-                    category.active
+                    category.isActive
                       ? "bg-emerald-100 text-emerald-800"
                       : "bg-slate-200 text-slate-600"
                   }`}
                 >
                   <span
                     className={`h-1.5 w-1.5 rounded-full ${
-                      category.active
+                      category.isActive
                         ? "bg-emerald-600"
                         : "bg-slate-500"
                     }`}
                   />
 
-                  {category.active ? "Active" : "Inactive"}
+                  {category.isActive ? "Active" : "Inactive"}
                 </span>
               </div>
 
@@ -385,14 +397,16 @@ export default function AdminCategories() {
                     <button
                       type="button"
                       onClick={() => saveRename(category.id)}
-                      className="rounded-xl bg-emerald-700 px-4 py-2 text-xs font-semibold text-white transition hover:bg-emerald-800"
+                      disabled={busy === category.id}
+                      className="rounded-xl bg-emerald-700 px-4 py-2 text-xs font-semibold text-white transition hover:bg-emerald-800 disabled:opacity-70"
                     >
-                      Save
+                      {busy === category.id ? "Saving…" : "Save"}
                     </button>
 
                     <button
                       type="button"
                       onClick={cancelRename}
+                      disabled={busy === category.id}
                       className="rounded-xl border border-slate-200 bg-white/80 px-4 py-2 text-xs font-medium text-slate-700 transition hover:bg-white"
                     >
                       Cancel
@@ -403,21 +417,24 @@ export default function AdminCategories() {
                     <button
                       type="button"
                       onClick={() => startRename(category)}
-                      className="rounded-xl border border-slate-200 bg-white/80 px-4 py-2 text-xs font-medium text-slate-700 transition hover:bg-white"
+                      disabled={Boolean(busy)}
+                      className="rounded-xl border border-slate-200 bg-white/80 px-4 py-2 text-xs font-medium text-slate-700 transition hover:bg-white disabled:opacity-60"
                     >
                       Rename
                     </button>
 
                     <button
                       type="button"
-                      onClick={() => toggleCategory(category.id)}
-                      className={`rounded-xl border px-4 py-2 text-xs font-medium transition ${
-                        category.active
+                      onClick={() => toggleCategory(category)}
+                      disabled={Boolean(busy)}
+                      aria-busy={busy === category.id}
+                      className={`rounded-xl border px-4 py-2 text-xs font-medium transition disabled:opacity-60 ${
+                        category.isActive
                           ? "border-slate-200 bg-white/80 text-slate-700 hover:bg-white"
                           : "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
                       }`}
                     >
-                      {category.active ? "Deactivate" : "Activate"}
+                      {busy === category.id ? "Saving…" : category.isActive ? "Deactivate" : "Activate"}
                     </button>
                   </>
                 )}
@@ -430,9 +447,8 @@ export default function AdminCategories() {
       {/* INFORMATION NOTE */}
 
       <p className="px-1 text-xs leading-relaxed text-slate-500">
-        Deactivated categories remain visible to administrators but
-        should no longer appear as options when customers create new
-        tickets.
+        Deactivated categories stay on existing tickets but are no longer offered to
+        customers when they create new tickets.
       </p>
     </div>
   );

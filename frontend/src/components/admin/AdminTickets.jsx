@@ -1,82 +1,12 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { useAuth } from "../../auth/useAuth.js";
+import { useApiData } from "../../api/useApiData.js";
+import { assignTicket, getTicket, listQueue, nextStatus, ticketErrorMessage, updateTicketStatus } from "../../api/tickets.js";
+import { getStats, listAssignableStaff } from "../../api/admin.js";
+import { capitalize, formatIsoDate, STATUS_LABELS } from "../staff/staffFormat.js";
+import { useDebouncedValue } from "../staff/useDebouncedValue.js";
 
-// ========================================
-// SAMPLE TICKET DATA
-// ========================================
-
-const initialTickets = [
-  {
-    id: "HD-1042",
-    subject: "Unable to access my account",
-    customer: "Riya Sharma",
-    email: "riya@example.com",
-    category: "Account",
-    priority: "High",
-    status: "Open",
-    assignee: "Unassigned",
-    created: "2026-10-24",
-    description:
-      "I have been trying to log in to my account, but it keeps showing an error even after resetting my password.",
-  },
-  {
-    id: "HD-1041",
-    subject: "Incorrect billing amount",
-    customer: "Arjun Patel",
-    email: "arjun@example.com",
-    category: "Billing",
-    priority: "High",
-    status: "In Progress",
-    assignee: "Shwetaleena Kundu",
-    created: "2026-10-23",
-    description:
-      "The amount charged on my latest invoice is different from the amount shown in my subscription plan.",
-  },
-  {
-    id: "HD-1040",
-    subject: "Password reset confirmation",
-    customer: "Neha Verma",
-    email: "neha@example.com",
-    category: "Account",
-    priority: "Medium",
-    status: "Resolved",
-    assignee: "Mimansa Das",
-    created: "2026-10-22",
-    description:
-      "I requested a password reset and wanted confirmation that my account is secure.",
-  },
-  {
-    id: "HD-1039",
-    subject: "Application keeps crashing",
-    customer: "Kabir Singh",
-    email: "kabir@example.com",
-    category: "Technical",
-    priority: "Medium",
-    status: "Open",
-    assignee: "Unassigned",
-    created: "2026-10-21",
-    description:
-      "The application closes automatically whenever I try to open the settings page.",
-  },
-  {
-    id: "HD-1038",
-    subject: "Update registered email address",
-    customer: "Ananya Das",
-    email: "ananya@example.com",
-    category: "Account",
-    priority: "Low",
-    status: "In Progress",
-    assignee: "Shwetaleena Kundu",
-    created: "2026-10-20",
-    description:
-      "I need to change the email address associated with my account.",
-  },
-];
-
-const agents = [
-  "Unassigned",
-  "Shwetaleena Kundu",
-  "Mimansa Das",
-];
+const PAGE_SIZE = 20;
 
 // ========================================
 // BADGE COLORS
@@ -164,82 +94,264 @@ function Badge({ value, type }) {
 }
 
 // ========================================
+// TICKET DETAILS MODAL
+// ========================================
+
+function TicketModal({ ticketId, staff, onClose, onChanged }) {
+  const { token, endSessionIfRejected } = useAuth();
+  const loadTicket = useCallback((authToken) => getTicket(authToken, ticketId), [ticketId]);
+  const { data: ticket, status, error, reload, setData } = useApiData(loadTicket);
+  const [busy, setBusy] = useState(null);
+  const [actionError, setActionError] = useState(null);
+
+  // Escape closes the dialog.
+  useEffect(() => {
+    const onKey = (event) => event.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  async function save(kind, action) {
+    if (busy) return;
+    setBusy(kind);
+    setActionError(null);
+    try {
+      const updated = await action();
+      setData(() => updated);
+      onChanged();
+    } catch (saveError) {
+      if (!endSessionIfRejected(saveError)) {
+        setActionError(ticketErrorMessage(saveError, "The change could not be saved. Please try again."));
+      }
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const allowedNext = ticket ? nextStatus(ticket.status) : null;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <div
+        className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-3xl border border-white/80 bg-[#f3faf6] p-6 shadow-2xl sm:p-8"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="ticket-modal-title"
+      >
+        {/* MODAL HEADER */}
+
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-xs font-semibold text-emerald-700">
+              {ticket?.ticketNumber ?? "Ticket"}
+            </p>
+
+            <h2
+              id="ticket-modal-title"
+              className="mt-2 break-words text-xl font-semibold text-emerald-950"
+            >
+              {ticket?.subject ?? (status === "error" ? "Ticket unavailable" : "Loading…")}
+            </h2>
+          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-full bg-white px-3 py-2 text-sm text-slate-600 hover:bg-slate-100"
+            aria-label="Close ticket details"
+          >
+            ✕
+          </button>
+        </div>
+
+        {status === "error" && !ticket && (
+          <p role="alert" className="mt-6 rounded-2xl bg-red-50 p-4 text-sm text-red-700">
+            {ticketErrorMessage(error, "This ticket could not be loaded.")}{" "}
+            <button type="button" onClick={reload} className="font-semibold underline">Try again</button>
+          </p>
+        )}
+
+        {ticket && (
+          <>
+            {/* CUSTOMER DETAILS */}
+
+            <div className="mt-6 grid grid-cols-2 gap-4 rounded-2xl bg-white/70 p-5">
+              <div>
+                <p className="text-xs text-slate-500">
+                  Customer
+                </p>
+
+                <p className="mt-1 text-sm font-medium text-slate-700">
+                  {ticket.createdBy?.name}
+                </p>
+              </div>
+
+              <div>
+                <p className="text-xs text-slate-500">
+                  Created
+                </p>
+
+                <p className="mt-1 text-sm font-medium text-slate-700">
+                  {formatIsoDate(ticket.createdAt)}
+                </p>
+              </div>
+
+              <div>
+                <p className="text-xs text-slate-500">
+                  Category
+                </p>
+
+                <p className="mt-1 text-sm font-medium text-slate-700">
+                  {ticket.category?.name}
+                </p>
+              </div>
+
+              <div>
+                <p className="text-xs text-slate-500">
+                  Priority
+                </p>
+
+                <div className="mt-1">
+                  <Badge
+                    value={capitalize(ticket.priority)}
+                    type="priority"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* DESCRIPTION */}
+
+            <div className="mt-6">
+              <h3 className="text-sm font-semibold text-emerald-950">
+                Issue Description
+              </h3>
+
+              <p className="mt-3 whitespace-pre-wrap break-words rounded-2xl bg-white/70 p-4 text-sm leading-7 text-slate-600">
+                {ticket.description}
+              </p>
+            </div>
+
+            {/* MANAGEMENT CONTROLS */}
+
+            <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div>
+                <label htmlFor="admin-ticket-assignee" className="mb-2 block text-xs font-semibold text-slate-600">
+                  Assign Agent{busy === "assign" && " · saving…"}
+                </label>
+
+                <select
+                  id="admin-ticket-assignee"
+                  value={ticket.assignedTo?.id ?? ""}
+                  onChange={(event) =>
+                    save("assign", () => assignTicket(token, ticket.id, { assignedTo: event.target.value || null }))
+                  }
+                  disabled={Boolean(busy) || !staff}
+                  style={inputStyle}
+                >
+                  <option value="">Unassigned</option>
+                  {/* Keep the current assignee listed even if they are no longer active. */}
+                  {ticket.assignedTo && !staff?.some((member) => member.id === ticket.assignedTo.id) && (
+                    <option value={ticket.assignedTo.id}>{ticket.assignedTo.name}</option>
+                  )}
+                  {staff?.map((member) => (
+                    <option key={member.id} value={member.id}>
+                      {member.name} ({capitalize(member.role)})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label htmlFor="admin-ticket-status" className="mb-2 block text-xs font-semibold text-slate-600">
+                  Ticket Status{busy === "status" && " · saving…"}
+                </label>
+
+                <select
+                  id="admin-ticket-status"
+                  value={ticket.status}
+                  onChange={(event) =>
+                    event.target.value !== ticket.status &&
+                    save("status", () => updateTicketStatus(token, ticket.id, event.target.value))
+                  }
+                  disabled={Boolean(busy) || !allowedNext}
+                  style={inputStyle}
+                >
+                  {/* Status only moves forward, one step at a time. */}
+                  {["open", "in_progress", "resolved"].map((value) => (
+                    <option key={value} value={value} disabled={value !== ticket.status && value !== allowedNext}>
+                      {STATUS_LABELS[value]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {actionError && (
+              <p role="alert" className="mt-4 rounded-xl bg-red-50 px-4 py-3 text-xs text-red-700">
+                {actionError}
+              </p>
+            )}
+          </>
+        )}
+
+        {/* FOOTER */}
+
+        <div className="mt-8 flex justify-end">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl bg-emerald-700 px-6 py-3 text-sm font-semibold text-white transition hover:bg-emerald-800"
+          >
+            Done
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ========================================
 // MAIN COMPONENT
 // ========================================
 
-export default function AdminTickets() {
-  const [tickets, setTickets] = useState(initialTickets);
-
+// All tickets (admins see every ticket). Filters and search run on the server.
+export default function AdminTickets({ initialTicketId = null }) {
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("All");
-  const [priorityFilter, setPriorityFilter] = useState("All");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [priorityFilter, setPriorityFilter] = useState("all");
+  const [page, setPage] = useState(1);
+  const [selectedTicketId, setSelectedTicketId] = useState(initialTicketId);
 
-  const [selectedTicketId, setSelectedTicketId] = useState(null);
+  const query = useDebouncedValue(search.trim(), 300);
+  useEffect(() => {
+    setPage(1);
+  }, [query, statusFilter, priorityFilter]);
 
-  const selectedTicket = tickets.find(
-    (ticket) => ticket.id === selectedTicketId
+  const loadTickets = useCallback(
+    (token) => listQueue(token, { q: query, status: statusFilter, priority: priorityFilter, page, limit: PAGE_SIZE }),
+    [query, statusFilter, priorityFilter, page],
   );
+  const list = useApiData(loadTickets);
+  const loadStats = useCallback((token) => getStats(token), []);
+  const stats = useApiData(loadStats);
+  const loadStaff = useCallback((token) => listAssignableStaff(token), []);
+  const staff = useApiData(loadStaff);
 
-  // ========================================
-  // FILTERING
-  // ========================================
+  const tickets = list.data?.tickets ?? [];
+  const totalPages = list.data ? Math.max(1, Math.ceil(list.data.total / PAGE_SIZE)) : 1;
 
-  const filteredTickets = useMemo(() => {
-    return tickets.filter((ticket) => {
-      const query = search.toLowerCase().trim();
-
-      const matchesSearch =
-        ticket.id.toLowerCase().includes(query) ||
-        ticket.subject.toLowerCase().includes(query) ||
-        ticket.customer.toLowerCase().includes(query);
-
-      const matchesStatus =
-        statusFilter === "All" ||
-        ticket.status === statusFilter;
-
-      const matchesPriority =
-        priorityFilter === "All" ||
-        ticket.priority === priorityFilter;
-
-      return (
-        matchesSearch &&
-        matchesStatus &&
-        matchesPriority
-      );
-    });
-  }, [tickets, search, statusFilter, priorityFilter]);
-
-  // ========================================
-  // UPDATE TICKET
-  // ========================================
-
-  function updateTicket(id, field, value) {
-    setTickets((previousTickets) =>
-      previousTickets.map((ticket) =>
-        ticket.id === id
-          ? { ...ticket, [field]: value }
-          : ticket
-      )
-    );
-  }
-
-  // ========================================
-  // TICKET COUNTS
-  // ========================================
-
-  const total = tickets.length;
-
-  const open = tickets.filter(
-    (ticket) => ticket.status === "Open"
-  ).length;
-
-  const inProgress = tickets.filter(
-    (ticket) => ticket.status === "In Progress"
-  ).length;
-
-  const resolved = tickets.filter(
-    (ticket) => ticket.status === "Resolved"
-  ).length;
+  const refresh = () => {
+    list.reload();
+    stats.reload();
+  };
 
   return (
     <div className="space-y-6">
@@ -250,10 +362,10 @@ export default function AdminTickets() {
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         {[
-          { label: "Total Tickets", value: total },
-          { label: "Open", value: open },
-          { label: "In Progress", value: inProgress },
-          { label: "Resolved", value: resolved },
+          { label: "Total Tickets", value: stats.data?.total },
+          { label: "Open", value: stats.data?.byStatus.open },
+          { label: "In Progress", value: stats.data?.byStatus.in_progress },
+          { label: "Resolved", value: stats.data?.byStatus.resolved },
         ].map((item) => (
           <div
             key={item.label}
@@ -267,7 +379,7 @@ export default function AdminTickets() {
             </p>
 
             <p className="mt-2 text-2xl font-semibold text-emerald-950">
-              {item.value}
+              {item.value ?? "—"}
             </p>
           </div>
         ))}
@@ -285,13 +397,15 @@ export default function AdminTickets() {
       >
         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
           <div>
-            <label className="mb-2 block text-xs font-medium text-slate-600">
+            <label htmlFor="admin-ticket-search" className="mb-2 block text-xs font-medium text-slate-600">
               Search Tickets
             </label>
 
             <input
-              type="text"
-              placeholder="Search ID, subject, customer..."
+              id="admin-ticket-search"
+              type="search"
+              maxLength={100}
+              placeholder="Search ticket ID or subject..."
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               style={inputStyle}
@@ -299,40 +413,42 @@ export default function AdminTickets() {
           </div>
 
           <div>
-            <label className="mb-2 block text-xs font-medium text-slate-600">
+            <label htmlFor="admin-ticket-status-filter" className="mb-2 block text-xs font-medium text-slate-600">
               Status
             </label>
 
             <select
+              id="admin-ticket-status-filter"
               value={statusFilter}
               onChange={(event) =>
                 setStatusFilter(event.target.value)
               }
               style={inputStyle}
             >
-              <option value="All">All Statuses</option>
-              <option value="Open">Open</option>
-              <option value="In Progress">In Progress</option>
-              <option value="Resolved">Resolved</option>
+              <option value="all">All Statuses</option>
+              <option value="open">Open</option>
+              <option value="in_progress">In Progress</option>
+              <option value="resolved">Resolved</option>
             </select>
           </div>
 
           <div>
-            <label className="mb-2 block text-xs font-medium text-slate-600">
+            <label htmlFor="admin-ticket-priority-filter" className="mb-2 block text-xs font-medium text-slate-600">
               Priority
             </label>
 
             <select
+              id="admin-ticket-priority-filter"
               value={priorityFilter}
               onChange={(event) =>
                 setPriorityFilter(event.target.value)
               }
               style={inputStyle}
             >
-              <option value="All">All Priorities</option>
-              <option value="High">High</option>
-              <option value="Medium">Medium</option>
-              <option value="Low">Low</option>
+              <option value="all">All Priorities</option>
+              <option value="high">High</option>
+              <option value="medium">Medium</option>
+              <option value="low">Low</option>
             </select>
           </div>
         </div>
@@ -360,11 +476,18 @@ export default function AdminTickets() {
           </div>
 
           <span className="text-xs font-medium text-emerald-800">
-            {filteredTickets.length} tickets
+            {list.data ? `${list.data.total} tickets` : "…"}
           </span>
         </div>
 
-        <div className="overflow-x-auto">
+        {list.status === "error" && (
+          <p role="alert" className="px-5 py-6 text-sm text-red-700">
+            {ticketErrorMessage(list.error, "Tickets could not be loaded.")}{" "}
+            <button type="button" onClick={list.reload} className="font-semibold underline">Try again</button>
+          </p>
+        )}
+
+        <div className="overflow-x-auto" aria-busy={list.status === "loading"}>
           <table className="w-full min-w-[1050px] border-collapse text-left">
             <thead>
               <tr className="border-b border-white/70 bg-white/40">
@@ -388,7 +511,7 @@ export default function AdminTickets() {
             </thead>
 
             <tbody>
-              {filteredTickets.map((ticket) => (
+              {tickets.map((ticket) => (
                 <tr
                   key={ticket.id}
                   className="border-b border-white/60 transition hover:bg-white/40"
@@ -397,10 +520,10 @@ export default function AdminTickets() {
 
                   <td className="px-5 py-5">
                     <p className="text-xs font-semibold text-emerald-800">
-                      {ticket.id}
+                      {ticket.ticketNumber}
                     </p>
 
-                    <p className="mt-1 max-w-[230px] text-sm font-medium text-emerald-950">
+                    <p className="mt-1 max-w-[230px] break-words text-sm font-medium text-emerald-950">
                       {ticket.subject}
                     </p>
                   </td>
@@ -409,25 +532,25 @@ export default function AdminTickets() {
 
                   <td className="px-5 py-5">
                     <p className="text-sm font-medium text-slate-700">
-                      {ticket.customer}
+                      {ticket.createdBy?.name}
                     </p>
 
                     <p className="mt-1 text-xs text-slate-500">
-                      {ticket.email}
+                      Opened {formatIsoDate(ticket.createdAt)}
                     </p>
                   </td>
 
                   {/* CATEGORY */}
 
                   <td className="px-5 py-5 text-sm text-slate-600">
-                    {ticket.category}
+                    {ticket.category?.name}
                   </td>
 
                   {/* PRIORITY */}
 
                   <td className="px-5 py-5">
                     <Badge
-                      value={ticket.priority}
+                      value={capitalize(ticket.priority)}
                       type="priority"
                     />
                   </td>
@@ -436,7 +559,7 @@ export default function AdminTickets() {
 
                   <td className="px-5 py-5">
                     <Badge
-                      value={ticket.status}
+                      value={STATUS_LABELS[ticket.status]}
                       type="status"
                     />
                   </td>
@@ -445,7 +568,7 @@ export default function AdminTickets() {
 
                   <td className="px-5 py-5">
                     <span className="text-xs text-slate-700">
-                      {ticket.assignee}
+                      {ticket.assignedTo?.name ?? "Unassigned"}
                     </span>
                   </td>
 
@@ -465,190 +588,64 @@ export default function AdminTickets() {
                 </tr>
               ))}
 
-              {filteredTickets.length === 0 && (
+              {list.data && tickets.length === 0 && (
                 <tr>
                   <td
                     colSpan={7}
                     className="px-5 py-12 text-center text-sm text-slate-500"
                   >
-                    No tickets match your search or filters.
+                    {query || statusFilter !== "all" || priorityFilter !== "all"
+                      ? "No tickets match your search or filters."
+                      : "No tickets yet."}
+                  </td>
+                </tr>
+              )}
+
+              {!list.data && list.status === "loading" && (
+                <tr>
+                  <td colSpan={7} className="px-5 py-12 text-center text-sm text-slate-500">
+                    Loading tickets…
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
         </div>
+
+        {list.data && totalPages > 1 && (
+          <div className="flex items-center justify-between gap-3 border-t border-white/70 px-5 py-4 text-xs text-slate-600">
+            <button
+              type="button"
+              onClick={() => setPage((current) => current - 1)}
+              disabled={page <= 1}
+              className="rounded-xl border border-slate-200 bg-white/80 px-4 py-2 font-medium hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              ← Newer
+            </button>
+            <span>Page {page} of {totalPages}</span>
+            <button
+              type="button"
+              onClick={() => setPage((current) => current + 1)}
+              disabled={page >= totalPages}
+              className="rounded-xl border border-slate-200 bg-white/80 px-4 py-2 font-medium hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Older →
+            </button>
+          </div>
+        )}
       </div>
 
       {/* ========================================
           TICKET DETAILS MODAL
       ======================================== */}
 
-      {selectedTicket && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              setSelectedTicketId(null);
-            }
-          }}
-        >
-          <div
-            className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-3xl border border-white/80 bg-[#f3faf6] p-6 shadow-2xl sm:p-8"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="ticket-modal-title"
-          >
-            {/* MODAL HEADER */}
-
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="text-xs font-semibold text-emerald-700">
-                  {selectedTicket.id}
-                </p>
-
-                <h2
-                  id="ticket-modal-title"
-                  className="mt-2 text-xl font-semibold text-emerald-950"
-                >
-                  {selectedTicket.subject}
-                </h2>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setSelectedTicketId(null)}
-                className="rounded-full bg-white px-3 py-2 text-sm text-slate-600 hover:bg-slate-100"
-                aria-label="Close ticket details"
-              >
-                ✕
-              </button>
-            </div>
-
-            {/* CUSTOMER DETAILS */}
-
-            <div className="mt-6 grid grid-cols-2 gap-4 rounded-2xl bg-white/70 p-5">
-              <div>
-                <p className="text-xs text-slate-500">
-                  Customer
-                </p>
-
-                <p className="mt-1 text-sm font-medium text-slate-700">
-                  {selectedTicket.customer}
-                </p>
-              </div>
-
-              <div>
-                <p className="text-xs text-slate-500">
-                  Created
-                </p>
-
-                <p className="mt-1 text-sm font-medium text-slate-700">
-                  {selectedTicket.created}
-                </p>
-              </div>
-
-              <div>
-                <p className="text-xs text-slate-500">
-                  Category
-                </p>
-
-                <p className="mt-1 text-sm font-medium text-slate-700">
-                  {selectedTicket.category}
-                </p>
-              </div>
-
-              <div>
-                <p className="text-xs text-slate-500">
-                  Priority
-                </p>
-
-                <div className="mt-1">
-                  <Badge
-                    value={selectedTicket.priority}
-                    type="priority"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* DESCRIPTION */}
-
-            <div className="mt-6">
-              <h3 className="text-sm font-semibold text-emerald-950">
-                Issue Description
-              </h3>
-
-              <p className="mt-3 rounded-2xl bg-white/70 p-4 text-sm leading-7 text-slate-600">
-                {selectedTicket.description}
-              </p>
-            </div>
-
-            {/* MANAGEMENT CONTROLS */}
-
-            <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <div>
-                <label className="mb-2 block text-xs font-semibold text-slate-600">
-                  Assign Agent
-                </label>
-
-                <select
-                  value={selectedTicket.assignee}
-                  onChange={(event) =>
-                    updateTicket(
-                      selectedTicket.id,
-                      "assignee",
-                      event.target.value
-                    )
-                  }
-                  style={inputStyle}
-                >
-                  {agents.map((agent) => (
-                    <option key={agent} value={agent}>
-                      {agent}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="mb-2 block text-xs font-semibold text-slate-600">
-                  Ticket Status
-                </label>
-
-                <select
-                  value={selectedTicket.status}
-                  onChange={(event) =>
-                    updateTicket(
-                      selectedTicket.id,
-                      "status",
-                      event.target.value
-                    )
-                  }
-                  style={inputStyle}
-                >
-                  <option value="Open">Open</option>
-                  <option value="In Progress">
-                    In Progress
-                  </option>
-                  <option value="Resolved">Resolved</option>
-                </select>
-              </div>
-            </div>
-
-            {/* FOOTER */}
-
-            <div className="mt-8 flex justify-end">
-              <button
-                type="button"
-                onClick={() => setSelectedTicketId(null)}
-                className="rounded-xl bg-emerald-700 px-6 py-3 text-sm font-semibold text-white transition hover:bg-emerald-800"
-              >
-                Done
-              </button>
-            </div>
-          </div>
-        </div>
+      {selectedTicketId && (
+        <TicketModal
+          ticketId={selectedTicketId}
+          staff={staff.data}
+          onClose={() => setSelectedTicketId(null)}
+          onChanged={refresh}
+        />
       )}
     </div>
   );

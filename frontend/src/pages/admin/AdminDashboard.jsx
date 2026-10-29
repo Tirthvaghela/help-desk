@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router";
 import HelpDeskHeader from "../../components/common/helpdeskheader.jsx";
 import AdminOverview from "../../components/admin/AdminOverview.jsx";
 import AdminTickets from "../../components/admin/AdminTickets.jsx";
@@ -7,7 +8,24 @@ import AdminCategories from "../../components/admin/AdminCategories.jsx";
 import AdminReports from "../../components/admin/AdminReports.jsx";
 
 export default function AdminDashboard() {
-  const [activePage, setActivePage] = useState("Overview");
+  const PAGES = ["Overview", "Tickets", "Users", "Categories", "Reports"];
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [activePage, setActivePage] = useState(() => (PAGES.includes(searchParams.get("page")) ? searchParams.get("page") : "Overview"));
+  // Ticket whose details open on the Tickets page, e.g. from a notification link.
+  const [openTicketId, setOpenTicketId] = useState(null);
+
+  // Links such as /admin/dashboard?ticket=… or ?page=Users; the address is cleaned up after.
+  const linkedTicket = searchParams.get("ticket");
+  const linkedPage = searchParams.get("page");
+  useEffect(() => {
+    if (linkedTicket) {
+      setOpenTicketId(linkedTicket);
+      setActivePage("Tickets");
+    } else if (PAGES.includes(linkedPage)) {
+      setActivePage(linkedPage);
+    }
+    if (linkedTicket || linkedPage) setSearchParams({}, { replace: true });
+  }, [linkedTicket, linkedPage, setSearchParams]);
 
   const pageDescriptions = {
     Overview:
@@ -75,7 +93,7 @@ export default function AdminDashboard() {
               ADMIN TICKETS
           ======================================== */}
           {activePage === "Tickets" && (
-            <AdminTickets />
+            <AdminTickets key={openTicketId ?? "tickets"} initialTicketId={openTicketId} />
           )}
 
           {/* ========================================

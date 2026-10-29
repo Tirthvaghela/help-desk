@@ -78,6 +78,7 @@ Types are Mongoose schema types. "Ref" means `Schema.Types.ObjectId` with `ref` 
 | | | Stored values `customer`, `agent`, `admin`; default `customer` | Proposed | Brief §4, Contract §3 |
 | | | Public signup always creates `customer`; agent/admin only set by an admin | **Confirmed** | Brief §2 (HANDBOOK) |
 | `isActive` | Boolean | Default `true`. Admin can activate/deactivate. | **Confirmed** (activate/deactivate exists) | Brief §2 (HANDBOOK, admin controls) |
+| `tokenVersion` | Number | Default `0`. Copied into every sign-in token (`ver`); a password change or reset increments it, so every earlier token is refused. Never serialized. | Implemented (2026-10-29) | Contract §6 token rules, §6a |
 | `createdAt` | Date | Set on creation | Proposed | Brief §4, Contract §3 |
 | `updatedAt` | Date | Set on update | Proposed | this doc (S-9); not in Brief or Contract |
 
@@ -92,6 +93,7 @@ Stored as its own collection: **Default** (D-6, contract C-4). Inactive categori
 | *(model)* | — | Admins manage categories | **Confirmed** (admins manage categories) | Brief §2 (HANDBOOK, admin controls) |
 | | | Stored as its own collection | **Open** (Q-1) | Brief §4 lists it as *optional*; Contract C-4 proposes a collection |
 | `name` | String | Required, trimmed, 2–50 characters, unique **case-insensitive** | Proposed | Contract §10 |
+| `description` | String | Optional, trimmed, at most 200 characters, default `""` | Implemented (2026-10-29) | Contract D-9 (admin category screen) |
 | `isActive` | Boolean | Default `true`. Inactive categories stay on existing tickets but cannot be chosen for new ones. | Proposed | Brief §4 (field listed), Contract §10 |
 | `createdAt`, `updatedAt` | Date | Via `timestamps` | Proposed | this doc (S-9) |
 
@@ -144,12 +146,43 @@ Supports ticket-number generation ([Section 6](#6-ticket-number-generation)). No
 | `_id` | String | Counter name, e.g. `"ticket"` | Proposed | this doc |
 | `seq` | Number | Last number issued | Proposed | this doc |
 
-### 3.6 Not included
+### 3.6 AuthToken (implemented 2026-10-29)
+
+One-time links for password reset and email-change confirmation (contract §6a).
+
+| Field | Type | Rules |
+| --- | --- | --- |
+| `user` | Ref User | Required |
+| `purpose` | String enum | `password_reset` or `email_change` |
+| `tokenHash` | String | Required, unique. SHA-256 of the token; the token itself exists only in the email. |
+| `newEmail` | String | `email_change` only: the address that becomes the sign-in email once confirmed |
+| `expiresAt` | Date | Required. **TTL index** (`expireAfterSeconds: 0`) deletes expired documents; the code also checks it. |
+| `createdAt` | Date | Used for the one-reset-email-per-minute cooldown |
+
+Using a token is an atomic `findOneAndDelete`, so a link works exactly once. Issuing a new token deletes older ones of the same purpose for that user. Indexes: `{ tokenHash }` unique, `{ expiresAt }` TTL, `{ user, purpose, createdAt: -1 }`.
+
+### 3.7 Notification (implemented 2026-10-29)
+
+In-app notifications (contract §12a). One document per recipient.
+
+| Field | Type | Rules |
+| --- | --- | --- |
+| `recipient` | Ref User | Required. Always set by the server. |
+| `type` | String enum | `ticket_created`, `ticket_assigned`, `priority_changed`, `status_changed`, `ticket_resolved`, `comment_added` |
+| `title` | String | Required, at most 120 characters |
+| `message` | String | Required, at most 300 characters |
+| `ticket` | Ref Ticket | The related ticket, or `null` |
+| `readAt` | Date | `null` while unread |
+| `createdAt` | Date | Via `timestamps` (no `updatedAt`) |
+
+Indexes: `{ recipient, createdAt: -1, _id: -1 }` (newest-first list with stable pages) and `{ recipient, readAt }` (unread count).
+
+### 3.8 Not included
 
 | Item | Label | Note |
 | --- | --- | --- |
 | `TicketHistory` (full audit trail of assignment, priority and status changes) | **Open** (Q-4) | Brief §4 lists it as *optional*. Not in the Contract. |
-| Session / token collection | Not needed | Contract OPEN-2 (DECIDED): stateless JWT Bearer token. Revocation is part of open point C-7. |
+| Session collection | Not needed | Contract OPEN-2 (DECIDED): stateless JWT Bearer token. Sign-out everywhere uses `User.tokenVersion`; single-session revocation is part of open point C-7. |
 
 ---
 
