@@ -9,6 +9,7 @@ export function applyToJSON(schema) {
         delete ret._id;
       }
       delete ret.passwordHash;
+      delete ret.tokenVersion;
       return ret;
     },
   });

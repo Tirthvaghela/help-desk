@@ -8,6 +8,7 @@ import adminStatsRoutes from './routes/adminStats.routes.js';
 import { notFound, errorHandler } from './middleware/errorHandler.js';
 import customerTicketRoutes from "./routes/customerTicket.routes.js";
 import authRoutes from './routes/auth.routes.js';
+import notificationRoutes from './routes/notification.routes.js';
 
 const app = express();
 
@@ -28,6 +29,7 @@ app.use("/api/tickets", customerTicketRoutes);
 app.use('/api/tickets', agentTicketRoutes);
 // app.use('/api/admin', adminRoutes);
 app.use('/api/admin', adminStatsRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 
 app.use(notFound);

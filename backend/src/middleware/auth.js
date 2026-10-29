@@ -30,6 +30,10 @@ export async function requireAuth(req, res, next) {
   if (!user) {
     throw ApiError.unauthorized('Invalid or expired token');
   }
+  // Signed out everywhere by a password change or reset (tokens from before `ver` = 0).
+  if ((payload.ver ?? 0) !== (user.tokenVersion ?? 0)) {
+    throw ApiError.unauthorized('Your session has ended. Please sign in again.');
+  }
   if (!user.isActive) {
     throw ApiError.forbidden('This account has been deactivated', 'ACCOUNT_DISABLED');
   }

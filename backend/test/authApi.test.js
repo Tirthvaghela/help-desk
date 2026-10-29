@@ -188,7 +188,8 @@ describe('POST /api/auth/login', () => {
 
     assert.equal(res.body.user.role, 'admin');
     const payload = verifyToken(res.body.token);
-    assert.deepEqual(Object.keys(payload).sort(), ['exp', 'iat', 'sub']);
+    // User id and token version only; never the role.
+    assert.deepEqual(Object.keys(payload).sort(), ['exp', 'iat', 'sub', 'ver']);
     assert.equal(payload.sub, String(admin._id));
 
     const stats = await request(app).get('/api/admin/stats').set('Authorization', `Bearer ${res.body.token}`);
