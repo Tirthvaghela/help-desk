@@ -7,6 +7,7 @@ import { applyToJSON } from './toJSON.js';
 export const NOTIFICATION_TYPES = Object.freeze([
   'ticket_created',
   'ticket_assigned',
+  'ticket_unassigned',
   'priority_changed',
   'status_changed',
   'ticket_resolved',

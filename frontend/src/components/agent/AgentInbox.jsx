@@ -5,15 +5,20 @@ import {
   addComment,
   assignTicket,
   getTicket,
+  listCategories,
   listComments,
   listQueue,
-  nextStatus,
   TICKET_LIMITS,
+  ticketPermissions,
   ticketErrorMessage,
   updateTicketStatus,
 } from "../../api/tickets.js";
 import { formatDateTime, formatShortTime, initialsOf, STATUS_LABELS } from "../staff/staffFormat.js";
 import { useDebouncedValue } from "../staff/useDebouncedValue.js";
+import StatusHistory from "../staff/StatusHistory.jsx";
+import SlaBadge from "../staff/SlaBadge.jsx";
+import { slaDeadline } from "../staff/slaFormat.js";
+import { AGENT_ASSIGNEE_OPTIONS, agentAssigneeParam, categoryParam, filterKey, pagingFor } from "../staff/queueFilters.js";
 
 // ==============================
 // STYLES AND LABELS
@@ -131,6 +136,8 @@ function TicketItem({ ticket, selected, onClick }) {
           {ticket.priority}
         </span>
 
+        <SlaBadge ticket={ticket} size="small" />
+
         {!ticket.assignedTo && (
           <span className="rounded-full border border-[#dce8e0] bg-white/80 px-3 py-1 text-[10px] font-medium text-[#758b80]">
             Unassigned
@@ -211,21 +218,28 @@ export default function AgentInbox({ initialTicketId = null }) {
 
   const [activeFilter, setActiveFilter] = useState("all");
   const [priorityFilter, setPriorityFilter] = useState("all");
-  const [assignedOnly, setAssignedOnly] = useState(false);
+  const [categoryFilter, setCategoryFilter] = useState("all");
+  const [assigneeFilter, setAssigneeFilter] = useState("all");
   const [search, setSearch] = useState("");
-  const [page, setPage] = useState(1);
   const [reply, setReply] = useState("");
 
   const [busy, setBusy] = useState(null); // "assign" | "priority" | "status" | "reply"
   const [actionError, setActionError] = useState(null);
 
+  const loadCategories = useCallback((authToken) => listCategories(authToken), []);
+  const categories = useApiData(loadCategories);
+
   const query = useDebouncedValue(search.trim(), 300);
-  const assignee = assignedOnly ? "me" : undefined;
+  const assignee = agentAssigneeParam(assigneeFilter);
+  const category = categoryParam(categoryFilter, categories.data);
 
   // Back to the first page whenever the filters change.
-  useEffect(() => {
-    setPage(1);
-  }, [activeFilter, priorityFilter, assignedOnly, query]);
+  const filtersKey = filterKey({ status: activeFilter, priority: priorityFilter, category, assignee, q: query });
+  const [storedPaging, setPaging] = useState({ key: filtersKey, page: 1 });
+  const paging = pagingFor(storedPaging, filtersKey);
+  if (paging !== storedPaging) setPaging(paging);
+  const page = paging.page;
+  const goToPage = (next) => setPaging({ key: filtersKey, page: next });
 
   // ==============================
   // LOAD QUEUE, COUNTS AND THE SELECTED TICKET
@@ -236,12 +250,13 @@ export default function AgentInbox({ initialTicketId = null }) {
       listQueue(authToken, {
         status: activeFilter,
         priority: priorityFilter,
+        category,
         assignee,
         q: query,
         page,
         limit: PAGE_SIZE,
       }),
-    [activeFilter, priorityFilter, assignee, query, page],
+    [activeFilter, priorityFilter, category, assignee, query, page],
   );
   const queue = useApiData(loadQueue);
 
@@ -249,12 +264,12 @@ export default function AgentInbox({ initialTicketId = null }) {
     async (authToken) => {
       const results = await Promise.all(
         filters.map((filter) =>
-          listQueue(authToken, { status: filter.value, priority: priorityFilter, assignee, q: query, limit: 1 }),
+          listQueue(authToken, { status: filter.value, priority: priorityFilter, category, assignee, q: query, limit: 1 }),
         ),
       );
       return Object.fromEntries(filters.map((filter, index) => [filter.value, results[index].total]));
     },
-    [priorityFilter, assignee, query],
+    [priorityFilter, category, assignee, query],
   );
   const counts = useApiData(loadCounts);
 
@@ -347,7 +362,9 @@ export default function AgentInbox({ initialTicketId = null }) {
   };
 
   const replyTooLong = reply.trim().length > TICKET_LIMITS.comment.max;
-  const allowedNext = selectedTicket ? nextStatus(selectedTicket.status) : null;
+  // D-10: status only for your own tickets; no release while in progress; resolved is final.
+  const permissions = ticketPermissions(selectedTicket, user);
+  const allowedNext = permissions.nextStatus;
   const messages = selectedTicket ? toMessages(selectedTicket, comments, user?.id) : [];
 
   return (
@@ -418,19 +435,27 @@ export default function AgentInbox({ initialTicketId = null }) {
           ))}
         </div>
 
-        {/* ASSIGNED TO ME */}
-        <label className="mt-4 flex w-fit cursor-pointer items-center gap-2 rounded-full border border-white/80 bg-white/60 px-3 py-2 text-[11px] font-medium text-[#527361]">
-          <input
-            type="checkbox"
-            checked={assignedOnly}
-            onChange={(event) =>
-              setAssignedOnly(event.target.checked)
-            }
-            className="accent-[#2e8666]"
-          />
+        {/* ASSIGNMENT FILTER (always within the agent's own scope) */}
+        <div className="mt-4 flex items-center justify-between gap-3">
+          <span className="text-[12px] font-medium text-[#6d8579]">
+            Show
+          </span>
 
-          Assigned to me
-        </label>
+          <select
+            value={assigneeFilter}
+            onChange={(event) =>
+              setAssigneeFilter(event.target.value)
+            }
+            aria-label="Filter by assignment"
+            className="rounded-xl border border-white/85 bg-white/75 px-3 py-2 text-[12px] text-[#395c4b] outline-none"
+          >
+            {AGENT_ASSIGNEE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
 
         {/* PRIORITY FILTER */}
         <div className="mt-4 flex items-center justify-between gap-3">
@@ -450,6 +475,32 @@ export default function AgentInbox({ initialTicketId = null }) {
             <option value="high">High</option>
             <option value="medium">Medium</option>
             <option value="low">Low</option>
+          </select>
+        </div>
+
+        {/* CATEGORY FILTER */}
+        <div className="mt-4 flex items-center justify-between gap-3">
+          <span className="text-[12px] font-medium text-[#6d8579]">
+            Category
+          </span>
+
+          <select
+            value={categoryFilter}
+            onChange={(event) =>
+              setCategoryFilter(event.target.value)
+            }
+            disabled={categories.status !== "ready"}
+            aria-label="Filter by category"
+            className="min-w-0 max-w-[60%] rounded-xl border border-white/85 bg-white/75 px-3 py-2 text-[12px] text-[#395c4b] outline-none disabled:opacity-60"
+          >
+            <option value="all">
+              {categories.status === "error" ? "Categories unavailable" : "All Categories"}
+            </option>
+            {categories.data?.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.name}
+              </option>
+            ))}
           </select>
         </div>
 
@@ -494,7 +545,7 @@ export default function AgentInbox({ initialTicketId = null }) {
               </p>
 
               <p className="mt-2 text-[12px] text-[#83988a]">
-                {query || activeFilter !== "all" || priorityFilter !== "all" || assignedOnly
+                {query || activeFilter !== "all" || priorityFilter !== "all" || category || assignee
                   ? "Try changing your search or filters."
                   : "New customer tickets will appear here."}
               </p>
@@ -507,7 +558,7 @@ export default function AgentInbox({ initialTicketId = null }) {
           <div className="mt-4 flex items-center justify-between gap-2 text-[11px] text-[#617b6d]">
             <button
               type="button"
-              onClick={() => setPage((current) => current - 1)}
+              onClick={() => goToPage(page - 1)}
               disabled={page <= 1}
               className="rounded-full border border-white/80 bg-white/60 px-3 py-2 font-medium hover:bg-white/85 disabled:cursor-not-allowed disabled:opacity-50"
             >
@@ -516,7 +567,7 @@ export default function AgentInbox({ initialTicketId = null }) {
             <span>Page {page} of {totalPages}</span>
             <button
               type="button"
-              onClick={() => setPage((current) => current + 1)}
+              onClick={() => goToPage(page + 1)}
               disabled={page >= totalPages}
               className="rounded-full border border-white/80 bg-white/60 px-3 py-2 font-medium hover:bg-white/85 disabled:cursor-not-allowed disabled:opacity-50"
             >
@@ -600,6 +651,8 @@ export default function AgentInbox({ initialTicketId = null }) {
                   >
                     {statusLabels[selectedTicket.status]}
                   </span>
+
+                  <SlaBadge ticket={selectedTicket} />
                 </div>
               </div>
 
@@ -639,7 +692,7 @@ export default function AgentInbox({ initialTicketId = null }) {
                   <select
                     value={selectedTicket.priority}
                     onChange={handlePriorityChange}
-                    disabled={Boolean(busy)}
+                    disabled={Boolean(busy) || !permissions.canChangePriority}
                     className="mt-1.5 w-full cursor-pointer rounded-xl border border-white/90 bg-white/75 px-3 py-2.5 text-[12px] font-medium text-[#355647] outline-none transition focus:border-[#83c6a0] focus:ring-2 focus:ring-[#83c6a0]/30 disabled:cursor-not-allowed disabled:opacity-70"
                   >
                     <option value="low">Low</option>
@@ -657,10 +710,11 @@ export default function AgentInbox({ initialTicketId = null }) {
                       assignedToMe ? "me" : "unassigned"
                     }
                     onChange={handleAssigneeChange}
-                    disabled={Boolean(busy)}
+                    disabled={Boolean(busy) || !permissions.canChangeAssignee}
                     className="mt-1.5 w-full cursor-pointer rounded-xl border border-white/90 bg-white/75 px-3 py-2.5 text-[12px] font-medium text-[#355647] outline-none transition focus:border-[#83c6a0] focus:ring-2 focus:ring-[#83c6a0]/30 disabled:cursor-not-allowed disabled:opacity-70"
                   >
-                    <option value="unassigned">
+                    {/* An in-progress ticket must keep its assignee (D-10). */}
+                    <option value="unassigned" disabled={!permissions.canUnassign && assignedToMe}>
                       Unassigned
                     </option>
 
@@ -676,6 +730,7 @@ export default function AgentInbox({ initialTicketId = null }) {
                 <span>
                   {selectedTicket.category?.name ?? "No category"} · Opened{" "}
                   {formatDateTime(selectedTicket.createdAt)}
+                  {slaDeadline(selectedTicket) && ` · Due ${slaDeadline(selectedTicket)}`}
                 </span>
 
                 {!selectedTicket.assignedTo && (
@@ -684,6 +739,12 @@ export default function AgentInbox({ initialTicketId = null }) {
                   </span>
                 )}
               </div>
+
+              {permissions.statusHint && (
+                <p className="mt-2 text-[11px] text-[#8b9d93]">{permissions.statusHint}</p>
+              )}
+
+              <StatusHistory ticket={selectedTicket} className="mt-3" />
 
               {actionError && (
                 <p role="alert" className="mt-3 rounded-xl bg-red-50 px-3 py-2 text-[12px] text-red-700">

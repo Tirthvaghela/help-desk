@@ -7,7 +7,7 @@ import { hashPassword, passwordMatches, requireExistingPassword, requireNewPassw
 import { consumeToken, findToken, invalidLink, issueToken } from '../utils/oneTimeToken.js';
 import { signToken } from '../utils/token.js';
 import { serializeUser } from '../utils/userSerializer.js';
-import { sendEmail, sendEmailQuietly } from '../services/email.js';
+import { safeErrorDetails, sendEmail, sendEmailQuietly } from '../services/email.js';
 import {
   emailChangedNotice,
   emailChangeRequestedNotice,
@@ -35,16 +35,19 @@ async function requireCurrentPassword(req, value) {
   return user;
 }
 
-// Sets a new password and signs the user out everywhere (tokenVersion + 1). Outstanding
-// reset links are removed too. Returns the updated user.
+// Sets a new password and signs the user out everywhere (tokenVersion + 1). Outstanding reset and
+// email-change links go first: someone who knew the old password must not be able to confirm an
+// email change afterwards. Without transactions (standalone MongoDB) this order is the safe one:
+// if removing them fails, the password has not changed; if the update then fails, the worst
+// outcome is a link to request again. Returns the updated user.
 async function setPassword(userId, newPassword) {
-  const user = await User.findByIdAndUpdate(
+  const passwordHash = await hashPassword(newPassword);
+  await AuthToken.deleteMany({ user: userId, purpose: { $in: ['password_reset', 'email_change'] } });
+  return User.findByIdAndUpdate(
     userId,
-    { $set: { passwordHash: await hashPassword(newPassword) }, $inc: { tokenVersion: 1 } },
+    { $set: { passwordHash }, $inc: { tokenVersion: 1 } },
     { returnDocument: 'after' },
   );
-  await AuthToken.deleteMany({ user: userId, purpose: 'password_reset' });
-  return user;
 }
 
 // POST /api/auth/me/password — { currentPassword, newPassword }
@@ -87,7 +90,7 @@ export async function requestEmailChange(req, res) {
   } catch (err) {
     // Without the email the change can never be confirmed, so undo it and say so.
     await AuthToken.deleteMany({ user: user._id, purpose: 'email_change' });
-    console.error(`Email (email change) could not be sent: ${err?.message ?? err}`);
+    console.error(`Email (email change) could not be sent: ${safeErrorDetails(err)}`);
     throw new ApiError(503, 'EMAIL_DELIVERY_FAILED', 'We could not send the confirmation email. Please try again later.');
   }
   await sendEmailQuietly('email change notice', { to: user.email, ...emailChangeRequestedNotice({ name: user.name, newEmail }) });
@@ -129,6 +132,15 @@ export async function verifyEmailChange(req, res) {
     if (err?.code === 11000) throw ApiError.conflict('That email address has been registered by someone else in the meantime', 'EMAIL_TAKEN');
     throw err;
   }
+  // Reset links went to the old address, so they end with it. Only after the save: a refused
+  // change leaves them working. If this fails the change is undone (no transactions here), so the
+  // email never moves while an old reset link still works.
+  try {
+    await AuthToken.deleteMany({ user: user._id, purpose: 'password_reset' });
+  } catch (err) {
+    await User.updateOne({ _id: user._id, email: record.newEmail }, { $set: { email: previousEmail } });
+    throw err;
+  }
   await sendEmailQuietly('email changed notice', { to: previousEmail, ...emailChangedNotice({ name: user.name, newEmail: user.email }) });
   res.json({ email: user.email });
 }
@@ -162,7 +174,7 @@ export async function forgotPassword(req, res) {
       ...passwordResetEmail({ name: user.name, token, ttlMinutes: env.passwordResetTtlMinutes }),
     });
   } catch (err) {
-    console.error(`Password reset request failed: ${err?.message ?? err}`);
+    console.error(`Password reset request failed: ${safeErrorDetails(err)}`);
   }
 }
 

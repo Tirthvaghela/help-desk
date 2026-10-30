@@ -211,7 +211,8 @@ describe('GET /api/tickets (agent queue)', () => {
     const res = await api('get', '/api/tickets', u.admin);
     const item = res.body.tickets.find((ticket) => ticket.id === id(t.t2));
 
-    assert.deepEqual(Object.keys(item).sort(), ['assignedTo', 'category', 'createdAt', 'createdBy', 'id', 'priority', 'resolvedAt', 'status', 'subject', 'ticketNumber', 'updatedAt']);
+    // dueAt: the SLA due date, staff responses only (null for these factory tickets).
+    assert.deepEqual(Object.keys(item).sort(), ['assignedTo', 'category', 'createdAt', 'createdBy', 'dueAt', 'id', 'priority', 'resolvedAt', 'status', 'subject', 'ticketNumber', 'updatedAt']);
     assert.deepEqual(item.createdBy, { id: id(u.customerA), name: 'Asha Customer', role: 'customer' });
     assert.deepEqual(item.assignedTo, { id: id(u.agentX), name: 'Xena Agent', role: 'agent' });
     assert.deepEqual(item.category, { id: id(c.billing), name: 'Billing' });
@@ -390,8 +391,12 @@ describe('PATCH /api/tickets/:id/assign', () => {
 describe('PATCH /api/tickets/:id/status', () => {
   const setStatus = (ticket, user, body) => api('patch', `/api/tickets/${ticket}/status`, user).send(body);
 
+  // D-10: work starts only on an assigned ticket, so the agent claims t1 first.
+  const claim = (ticket, user) => api('patch', `/api/tickets/${ticket}/assign`, user).send({ assignedTo: id(user) });
+
   it('moves open → in_progress and in_progress → resolved', async (tc) => {
     if (!requireDB(tc)) return;
+    assert.equal((await claim(id(t.t1), u.agentX)).status, 200);
     const started = await setStatus(id(t.t1), u.agentX, { status: 'in_progress' });
     assert.equal(started.status, 200);
     assert.equal(started.body.ticket.status, 'in_progress');
@@ -408,13 +413,16 @@ describe('PATCH /api/tickets/:id/status', () => {
     const cases = [
       [t.t1, 'resolved', 'Cannot change status from open to resolved'],
       [t.t1, 'open', 'Cannot change status from open to open'],
-      [t.t5, 'open', 'Cannot change status from resolved to open'],
       [t.t2, 'open', 'Cannot change status from in_progress to open'],
     ];
     for (const [ticket, status, message] of cases) {
       const res = await setStatus(id(ticket), u.admin, { status });
       assertError(res, 400, 'INVALID_STATUS_TRANSITION');
       assert.equal(res.body.error.message, message);
+    }
+    // D-10: a resolved ticket is final, so any status change is TICKET_RESOLVED.
+    for (const status of ['open', 'in_progress', 'resolved']) {
+      assertError(await setStatus(id(t.t5), u.admin, { status }), 400, 'TICKET_RESOLVED');
     }
     assert.equal((await Ticket.findById(t.t5._id)).status, 'resolved');
   });
@@ -428,6 +436,7 @@ describe('PATCH /api/tickets/:id/status', () => {
 
   it('appends { status, changedBy, changedAt } to statusHistory, with changedBy from the token', async (tc) => {
     if (!requireDB(tc)) return;
+    assert.equal((await claim(id(t.t1), u.agentX)).status, 200);
     const before = Date.now();
     const res = await setStatus(id(t.t1), u.agentX, { status: 'in_progress', changedBy: id(u.admin) });
     const history = res.body.ticket.statusHistory;
@@ -450,6 +459,7 @@ describe('PATCH /api/tickets/:id/status', () => {
 
   it('only one of two simultaneous identical status changes succeeds', async (tc) => {
     if (!requireDB(tc)) return;
+    assert.equal((await claim(id(t.t1), u.agentX)).status, 200);
     const results = await Promise.all([
       setStatus(id(t.t1), u.agentX, { status: 'in_progress' }),
       setStatus(id(t.t1), u.admin, { status: 'in_progress' }),
@@ -482,12 +492,19 @@ describe('GET and POST /api/tickets/:id/comments', () => {
   const post = (ticket, user, body) => api('post', `/api/tickets/${ticket}/comments`, user).send(body);
   const list = (ticket, user) => api('get', `/api/tickets/${ticket}/comments`, user);
 
-  it('owner, agent inside the access rule and admin can read and post', async (tc) => {
+  it('owner, assigned agent and admin can read and post; other agents in the access rule can only read', async (tc) => {
     if (!requireDB(tc)) return;
-    for (const [user, ticket] of [[u.customerA, 't1'], [u.agentX, 't1'], [u.agentY, 't1'], [u.agentX, 't2'], [u.admin, 't3']]) {
+    for (const [user, ticket] of [[u.customerA, 't1'], [u.agentX, 't2'], [u.admin, 't3'], [u.admin, 't1']]) {
       const created = await post(id(t[ticket]), user, { message: `Hello from ${user.name}` });
       assert.equal(created.status, 201, `${user.name} → ${ticket}`);
       assert.equal((await list(id(t[ticket]), user)).status, 200);
+    }
+    // D-11: t1 is unassigned. Agents may read it but must claim it before replying.
+    for (const user of [u.agentX, u.agentY]) {
+      assert.equal((await list(id(t.t1), user)).status, 200, `${user.name} reads t1`);
+      const denied = await post(id(t.t1), user, { message: 'Not mine yet' });
+      assertError(denied, 403, 'FORBIDDEN');
+      assert.equal(denied.body.error.message, 'Assign this ticket to yourself to reply');
     }
   });
 
@@ -622,6 +639,7 @@ describe('GET /api/admin/stats', () => {
 
   it('counts match the tickets in the database', async (tc) => {
     if (!requireDB(tc)) return;
+    await api('patch', `/api/tickets/${id(t.t1)}/assign`, u.agentX).send({ assignedTo: id(u.agentX) }); // D-10: claim first
     await api('patch', `/api/tickets/${id(t.t1)}/status`, u.agentX).send({ status: 'in_progress' });
     const res = await api('get', '/api/admin/stats', u.admin);
 

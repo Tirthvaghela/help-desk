@@ -1,7 +1,7 @@
 # Help Desk Data Model
 
-> **Status: PROPOSAL (draft v0.2).** Engineering defaults D-1 to D-7 from [API_CONTRACT.md §1](API_CONTRACT.md#engineering-defaults-d1d7) are applied below and marked **Default**. A first implementation of these models exists on the local `feature/agent-workflow` work (not merged); see the change log.
-> This document describes the MongoDB/Mongoose models the backend should share. It is for review by the model owners before any model code is written. It does not change [API_CONTRACT.md](API_CONTRACT.md); where the two differ, the difference is recorded in [Section 9](#9-discrepancies-between-sources) instead of being resolved here.
+> **Status: implemented.** Every model below exists in `backend/src/models/`. The labels (Confirmed, Proposed, Open, Default) record where each decision came from and whether the responsible owner has agreed; they do not mean the item is unbuilt. Engineering defaults D-1 to D-7 from [API_CONTRACT.md §1](API_CONTRACT.md#engineering-defaults-d1d7) are marked **Default**.
+> This document does not change [API_CONTRACT.md](API_CONTRACT.md); where the two differ, the difference is recorded in [Section 9](#9-discrepancies-between-sources) instead of being resolved here.
 
 ## Contents
 
@@ -26,7 +26,7 @@
 | Short name | Document | Notes |
 | --- | --- | --- |
 | **Brief** | *Help Desk — Customer Support Ticket System*, project documentation v0.2 (`Help Desk.pdf`, kept outside this repository) | Marks each item as HANDBOOK (stated in the WeIntern handbook) or PROPOSED (team suggestion). Section 4 says collection names come from the handbook, but **field lists are proposals**. |
-| **Contract** | [docs/API_CONTRACT.md](API_CONTRACT.md), draft v0.3 | Whole document is a PROPOSAL, except OPEN-1 and OPEN-2, which are marked **DECIDED**. |
+| **Contract** | [docs/API_CONTRACT.md](API_CONTRACT.md), v0.12 | Implemented. Its §1 records which points are **DECIDED**, **DEFAULT** or **OPEN**. |
 
 ### Labels used in this document
 
@@ -71,7 +71,7 @@ Types are Mongoose schema types. "Ref" means `Schema.Types.ObjectId` with `ref` 
 | --- | --- | --- | --- | --- |
 | *(model)* | — | Collection for all three account types | **Confirmed** | Brief §4 (HANDBOOK collection name) |
 | `name` | String | Required, trimmed, 2–80 characters | Proposed | Contract §6 |
-| `email` | String | Required, unique, stored lower-cased, valid email | Proposed | Brief §4 ("email (unique)", PROPOSED), Contract §6 |
+| `email` | String | Required, unique, stored lower-cased, valid email, at most 254 characters | Proposed | Brief §4 ("email (unique)", PROPOSED), Contract §6 |
 | `passwordHash` | String | Required. Never serialized (S-1). | **Confirmed** (hash only, never returned) | Brief §5 (HANDBOOK) |
 | | | Excluded from queries by default (`select: false`); login explicitly selects it. | Proposed | this doc |
 | `role` | String enum | Three roles: customer, support agent, administrator | **Confirmed** (the three roles) | Brief §2 (HANDBOOK) |
@@ -118,6 +118,7 @@ Stored as its own collection: **Default** (D-6, contract C-4). Inactive categori
 | | | `null` meaning "unassigned" is part of the access rule | **Confirmed** | Contract OPEN-1 (DECIDED) |
 | | | Who may be assigned, and by whom | **Open** (Q-5) | Contract C-5, C-8 |
 | `resolvedAt` | Date | `null` until status becomes `resolved` | Proposed | Brief §4, Contract §3 |
+| `dueAt` | Date | SLA resolution due date: `createdAt` + the target hours for the priority (`utils/sla.js`; defaults high 24, medium 72, low 168 calendar hours from `SLA_HOURS_*`). Set by the server on creation; recalculated from `createdAt` in the same atomic update when the priority changes. Default `null`: tickets created before SLAs keep no due date (no backfill). Returned to staff only. | Implemented (2026-10-30) | Stretch goal "SLA due dates", Contract §3 |
 | `createdAt`, `updatedAt` | Date | Via `timestamps` | Proposed | Brief §4, Contract §3 |
 
 Status transitions allowed: `open → in_progress`, `in_progress → resolved`; anything else is rejected. The **workflow** is Confirmed (Brief §2); the exact rejection behaviour (400 `INVALID_STATUS_TRANSITION`) is Proposed (Contract §8). Enforcement belongs in the status endpoint, not the schema.
@@ -168,7 +169,7 @@ In-app notifications (contract §12a). One document per recipient.
 | Field | Type | Rules |
 | --- | --- | --- |
 | `recipient` | Ref User | Required. Always set by the server. |
-| `type` | String enum | `ticket_created`, `ticket_assigned`, `priority_changed`, `status_changed`, `ticket_resolved`, `comment_added` |
+| `type` | String enum | `ticket_created`, `ticket_assigned`, `ticket_unassigned` (D-10), `priority_changed`, `status_changed`, `ticket_resolved`, `comment_added` |
 | `title` | String | Required, at most 120 characters |
 | `message` | String | Required, at most 300 characters |
 | `ticket` | Ref Ticket | The related ticket, or `null` |
@@ -176,6 +177,19 @@ In-app notifications (contract §12a). One document per recipient.
 | `createdAt` | Date | Via `timestamps` (no `updatedAt`) |
 
 Indexes: `{ recipient, createdAt: -1, _id: -1 }` (newest-first list with stable pages) and `{ recipient, readAt }` (unread count).
+
+### 3.7a TicketSubmission (implemented 2026-10-29)
+
+One record per ticket submission sent with an `Idempotency-Key` (contract §7). It lets a retried submission return the ticket it created instead of creating another.
+
+| Field | Type | Rules |
+| --- | --- | --- |
+| `_id` | String | `"<userId>:<Idempotency-Key>"`. MongoDB's built-in unique `_id` index makes claiming a key atomic: of several identical requests exactly one insert succeeds. |
+| `ticket` | Ref Ticket | Required. The id the ticket is created with (chosen before it is inserted). |
+| `fingerprint` | String | Required. SHA-256 of the validated subject, description, category and priority, so a key cannot be reused for other content. |
+| `createdAt` | Date | Via `timestamps` (no `updatedAt`). A claim older than 30 s whose ticket does not exist is treated as abandoned and released. |
+
+No index other than `_id`, and no change to existing collections. Records are kept (no expiry).
 
 ### 3.8 Not included
 
@@ -192,9 +206,13 @@ Indexes: `{ recipient, createdAt: -1, _id: -1 }` (newest-first list with stable 
 User 1 ──< Ticket.createdBy          (customer who raised the ticket)
 User 1 ──< Ticket.assignedTo         (agent/admin handling it; may be null)
 User 1 ──< Ticket.statusHistory[].changedBy
-Category 1 ──< Ticket.category       (if Category is a collection, Q-1)
+Category 1 ──< Ticket.category
 Ticket 1 ──< TicketComment.ticket    (one thread per ticket)
 User 1 ──< TicketComment.author
+User 1 ──< AuthToken.user             (one-time links)
+User 1 ──< Notification.recipient
+Ticket 1 ──< Notification.ticket      (may be null)
+Ticket 1 ──< TicketSubmission.ticket  (one claim per Idempotency-Key)
 ```
 
 | Relationship | Label | Source |
@@ -214,13 +232,18 @@ All indexes are **Proposed** (this doc) unless noted. Unique indexes also enforc
 | User | `{ email: 1 }` unique | Login lookup; duplicate signup → 409 `EMAIL_TAKEN` | Uniqueness **Proposed** (Brief §4, Contract §6) |
 | User | `{ role: 1, isActive: 1 }` | Admin user list filters; checking an assignee is an active agent/admin | Proposed |
 | Category | `{ name: 1 }` unique, collation `{ locale: 'en', strength: 2 }` | Case-insensitive uniqueness → 409 `CATEGORY_EXISTS` | Proposed (case-insensitive rule from Contract §10) |
-| Ticket | `{ ticketNumber: 1 }` unique | Uniqueness; search by number | Uniqueness **Confirmed** (Brief §2) |
+| Ticket | `{ ticketNumber: 1 }` unique | Uniqueness. A case-insensitive number search can only scan this index, not seek in it | Uniqueness **Confirmed** (Brief §2) |
 | Ticket | `{ createdBy: 1, createdAt: -1 }` | `GET /api/tickets/my` (own tickets, newest first) | Proposed |
 | Ticket | `{ assignedTo: 1, status: 1, createdAt: -1 }` | Agent queue under OPEN-1: `assignedTo: null` or `assignedTo: <agent>`, filtered by status, newest first; also the `assignee` filter | Proposed |
-| Ticket | `{ status: 1, category: 1 }` | Admin stats (volume by status and category) | Proposed; may be unnecessary at project scale |
+| Ticket | `{ status: 1, category: 1 }` | Admin queue filtered by both status and category. **Not** used by `GET /api/admin/stats`, which selects by `createdAt` | Proposed; may be unnecessary at project scale |
+| Ticket | `{ status: 1, dueAt: 1 }` | **Currently unused:** no code runs a query by due date. `GET /api/admin/analytics` selects by `createdAt` | Implemented (2026-10-30) |
 | TicketComment | `{ ticket: 1, createdAt: 1 }` | Thread for one ticket, oldest first | Proposed |
 
+The uses above were checked with MongoDB's `explain` on the local QA data (2026-10-30), a small data set; the planner can choose differently at another size.
+
 Text search (`q` on `ticketNumber` and `subject`, Contract §8) can use a case-insensitive regex at this project's data volume. No text index proposed.
+
+Admin analytics (Contract §11) changes no schema and adds no index. It selects tickets by `createdAt`, which no index leads with, so a request reads the whole collection; so do `GET /api/admin/stats` with a date and the unfiltered admin queue. Measured at 50,000 tickets, the median was 47 ms for 7 days and 294 ms for all tickets ([test evidence](TEST_EVIDENCE.md)), so `{ createdAt: -1 }` is not needed at this scale.
 
 ---
 
@@ -245,7 +268,7 @@ Consequences to accept or reject:
 - **Gaps are possible.** If ticket creation fails after step 1 (e.g. validation error), that number is never used. Proposed: gaps are acceptable. Validating the request **before** step 1 keeps them rare.
 - **Starting above 1** (Q-3) needs the counter document created in advance (for example by the seed script) with `seq` set to one less than the first number, because `$inc` with `upsert` starts from 0.
 - **Numbers are strings.** Sorting by `ticketNumber` as text puts `HD-10` before `HD-9`; sort by `createdAt` instead (as the Contract already does).
-- **Duplicate submissions** (double-click) are handled by the frontend disabling the submit button (Contract §7), not by the counter.
+- **Duplicate submissions** (double-click, retry) are handled by the frontend disabling the submit button and sending an `Idempotency-Key`, which the backend claims in `TicketSubmission` ([§3.7a](#37a-ticketsubmission-implemented-2026-10-29), Contract §7), not by the counter.
 
 ---
 
@@ -336,3 +359,7 @@ Ownership follows the team allocation in the README. This document assigns no ne
 | --- | --- | --- |
 | 2026-10-25 | Draft v0.1: proposal for User, Category, Ticket, TicketComment and Counter; indexes; ticket numbering; OPEN-1 implications; open questions and source discrepancies | Tirth Vaghela |
 | 2026-10-25 | v0.2: applied engineering defaults D-1, D-2, D-4, D-5, D-6 (Q-1, Q-2, Q-5, Q-8, A-7, A-9, ownership). First implementation of User, Category, Ticket, TicketComment and Counter written by the integration lead for review by Swati (owner of User, Category, Ticket, Counter) and Ayushi. Q-3, Q-4, Q-6, Q-7, Q-9, Q-10 remain open. | Tirth Vaghela |
+| 2026-10-29 | §3.7a `TicketSubmission`: idempotent ticket submissions (contract §7 v0.9). New collection; no new index, no change to existing data. | Tirth Vaghela |
+| 2026-10-30 | §3.3 Ticket `dueAt` (SLA resolution due date) and §5 index `{ status: 1, dueAt: 1 }`. Optional field: existing tickets need no migration. | Tirth Vaghela |
+| 2026-10-30 | §5: analytics adds no schema or index; the stated purpose of `{ status: 1, dueAt: 1 }` corrected. | Tirth Vaghela |
+| 2026-10-30 | Documentation only, no schema change: status updated to implemented; email length limit, relationships and duplicate-submission handling added; index uses corrected from `explain`, including `{ status: 1, dueAt: 1 }` being unused. | Tirth Vaghela |

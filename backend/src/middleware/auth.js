@@ -11,6 +11,9 @@ const BEARER_PATTERN = /^Bearer\s+(\S+)$/i;
 // the database into req.user. Missing, invalid or expired tokens and tokens for users that
 // no longer exist get 401; deactivated accounts get 403 ACCOUNT_DISABLED.
 export async function requireAuth(req, res, next) {
+  // Answers to authenticated requests are private: never keep them in browser or proxy caches.
+  // Set first, so the 401/403 answers below carry it too.
+  res.set('Cache-Control', 'no-store');
   const match = BEARER_PATTERN.exec(req.get('Authorization') ?? '');
   if (!match) {
     throw ApiError.unauthorized();

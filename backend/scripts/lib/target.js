@@ -41,3 +41,43 @@ export function requireSafeTarget(argv, { readOnly = false } = {}) {
   }
   return uri;
 }
+
+// Demo data is stricter than the setup scripts and has no override flags: only a local
+// database whose name marks it for development or testing, and never in production.
+const DEMO_DATABASE_PATTERN = /_(demo|dev|test)$/;
+
+// { ok: true, label } or { ok: false, label, reason }. Never includes the connection string.
+export function checkDemoTarget(uri, nodeEnv) {
+  if (!uri) return { ok: false, label: '(none)', reason: 'MONGODB_URI is not set (environment or backend/.env).' };
+  let target;
+  try {
+    target = describeTarget(uri);
+  } catch {
+    return { ok: false, label: '(invalid)', reason: 'MONGODB_URI is not a valid single-host connection string.' };
+  }
+  if (!target.local) {
+    return { ok: false, label: target.label, reason: 'Demo data is only written to a local MongoDB (localhost, 127.0.0.1 or ::1).' };
+  }
+  if (!DEMO_DATABASE_PATTERN.test(target.database)) {
+    return {
+      ok: false,
+      label: target.label,
+      reason: 'The database name must end in _demo, _dev or _test, e.g. mongodb://127.0.0.1:27017/helpdesk_demo.',
+    };
+  }
+  if (nodeEnv === 'production') {
+    return { ok: false, label: target.label, reason: 'Demo data is never written with NODE_ENV=production.' };
+  }
+  return { ok: true, label: target.label };
+}
+
+// Returns the URI to connect to, or exits with the reason.
+export function requireDemoTarget() {
+  const check = checkDemoTarget(process.env.MONGODB_URI, process.env.NODE_ENV);
+  console.log(`Target: ${check.label}`);
+  if (!check.ok) {
+    console.error(`Refusing to seed demo data. ${check.reason}`);
+    process.exit(1);
+  }
+  return process.env.MONGODB_URI;
+}

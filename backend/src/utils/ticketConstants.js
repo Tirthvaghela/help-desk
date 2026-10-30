@@ -3,4 +3,7 @@
 
 export const TICKET_STATUSES = Object.freeze(['open', 'in_progress', 'resolved']);
 
+// How statuses are written for people (in-app notifications, emails), as in the customer portal.
+export const STATUS_LABELS = Object.freeze({ open: 'Open', in_progress: 'In progress', resolved: 'Resolved' });
+
 export const TICKET_PRIORITIES = Object.freeze(['low', 'medium', 'high']);

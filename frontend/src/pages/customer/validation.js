@@ -62,6 +62,15 @@ export function validateTicket({ subject, description, categoryId, priority }) {
   });
 }
 
+// The API has no specific code for this: a category deactivated after the form loaded comes back
+// as VALIDATION_ERROR with this message (customerTicket.controller.js, assertActiveCategory).
+export const INACTIVE_CATEGORY_API_MESSAGE = 'categoryId must be an active category';
+export const CATEGORY_UNAVAILABLE_MESSAGE = 'That category is no longer available. Choose another one.';
+
+export function isInactiveCategoryError(error) {
+  return error?.status === 400 && error.code === 'VALIDATION_ERROR' && error.message === INACTIVE_CATEGORY_API_MESSAGE;
+}
+
 export function validateComment(message) {
   return lengthError(message, 'Message', TICKET_LIMITS.comment);
 }

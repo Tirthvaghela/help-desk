@@ -1,10 +1,17 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
-import { createTicket, listCategories, TICKET_LIMITS, TICKET_PRIORITIES, ticketErrorMessage } from "../../api/tickets.js";
+import {
+  createTicket,
+  listCategories,
+  submissionFor,
+  TICKET_LIMITS,
+  TICKET_PRIORITIES,
+  ticketErrorMessage,
+} from "../../api/tickets.js";
 import { useAuth } from "../../auth/useAuth.js";
 import { Card, ErrorAlert, FieldError, inputClass, labelClass, linkClass, primaryButtonClass, secondaryButtonClass } from "../../components/customer/ui.jsx";
 import { useApiData } from "../../api/useApiData.js";
-import { validateTicket } from "./validation.js";
+import { CATEGORY_UNAVAILABLE_MESSAGE, isInactiveCategoryError, validateTicket } from "./validation.js";
 
 function categoriesErrorMessage(error) {
   if (error?.status === 404) return "Ticket categories are not available from the server yet.";
@@ -29,6 +36,9 @@ export default function NewTicket() {
   const [fieldErrors, setFieldErrors] = useState({});
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  // The last submission's { payload, key }: retrying unchanged content reuses its
+  // Idempotency-Key, so a request that reached the server is never turned into two tickets.
+  const submission = useRef(null);
 
   const setField = (name) => (event) => setValues((previous) => ({ ...previous, [name]: event.target.value }));
   const describedBy = (name) => (fieldErrors[name] ? `ticket-${name}-error` : undefined);
@@ -45,20 +55,30 @@ export default function NewTicket() {
     setFieldErrors(errors);
     if (Object.keys(errors).length > 0) return;
 
+    const fields = {
+      subject: values.subject.trim(),
+      description: values.description.trim(),
+      categoryId: values.categoryId,
+      priority: values.priority,
+    };
+    submission.current = submissionFor(submission.current, fields);
+
     setSubmitting(true);
     try {
-      const ticket = await createTicket(token, {
-        subject: values.subject.trim(),
-        description: values.description.trim(),
-        categoryId: values.categoryId,
-        priority: values.priority,
-      });
+      const ticket = await createTicket(token, fields, { idempotencyKey: submission.current.key });
       const created = ticket?.ticketNumber ?? "Your ticket";
       navigate(ticket?.id ? `/tickets/${ticket.id}` : "/tickets", { replace: true, state: { created } });
     } catch (createError) {
       if (endSessionIfRejected(createError)) return;
-      setError(ticketErrorMessage(createError, "Your ticket could not be created. Please try again."));
       setSubmitting(false);
+      // Deactivated since the form loaded: refresh the choices and ask for another one.
+      if (isInactiveCategoryError(createError)) {
+        setValues((previous) => ({ ...previous, categoryId: "" }));
+        setFieldErrors({ categoryId: CATEGORY_UNAVAILABLE_MESSAGE });
+        categories.reload();
+        return;
+      }
+      setError(ticketErrorMessage(createError, "Your ticket could not be created. Please try again."));
     }
   };
 
@@ -78,7 +98,7 @@ export default function NewTicket() {
         )}
         {noCategories && (
           <p role="status" className="mb-5 rounded-xl bg-[#fff6e6] px-4 py-3 text-[12px] text-[#8a6223]">
-            Ticket categories haven't been set up yet, so tickets can't be raised right now. Please try again later.
+            No ticket categories are available right now, so tickets can't be raised. Please try again later.
           </p>
         )}
 

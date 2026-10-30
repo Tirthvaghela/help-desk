@@ -27,6 +27,34 @@ export function parseStatusBody(body) {
   return requireOneOf(status, TICKET_STATUSES, 'status');
 }
 
+// D-10: a resolved ticket is final. Its status, assignee and priority can no longer change.
+export function ticketResolvedError() {
+  return ApiError.badRequest('This ticket is resolved and can no longer be changed', 'TICKET_RESOLVED');
+}
+
+// D-10 status rules for a loaded ticket ({ status, assignedTo }), checked in this order:
+// resolved → 400 TICKET_RESOLVED; not one step forward → 400 INVALID_STATUS_TRANSITION;
+// no assignee → 400 ASSIGNEE_REQUIRED (in progress and resolved tickets always have an owner).
+// Agents only reach this for tickets assigned to them or unassigned (access rule), so with an
+// assignee present the actor is that assignee or an admin.
+export function assertStatusChangeAllowed(ticket, to) {
+  if (ticket.status === 'resolved') throw ticketResolvedError();
+  assertStatusTransition(ticket.status, to);
+  if (ticket.assignedTo == null) {
+    throw ApiError.badRequest(
+      to === 'in_progress' ? 'Assign the ticket before starting work' : 'Assign the ticket before resolving it',
+      'ASSIGNEE_REQUIRED',
+    );
+  }
+  return to;
+}
+
+// Extra conditions for the atomic status update: still in the status checked, and still
+// assigned, so a release or another change in between cannot leave a ticket without an owner.
+export function statusUpdateConditions(ticket) {
+  return { status: ticket.status, assignedTo: { $ne: null } };
+}
+
 // Validates a requested status change and returns the new status.
 // Throws 400 VALIDATION_ERROR if `to` is missing or not a known status,
 // and 400 INVALID_STATUS_TRANSITION if the move is not allowed.

@@ -14,4 +14,6 @@ process.env.AUTH_RATE_LIMIT_MAX = '0';
 process.env.SENSITIVE_RATE_LIMIT_MAX = '0';
 process.env.PASSWORD_RESET_TTL_MINUTES = '30';
 process.env.EMAIL_CHANGE_TTL_HOURS = '24';
+// Single-origin CORS (CLIENT_URL) in tests, even if backend/.env lists CORS_ORIGINS.
+process.env.CORS_ORIGINS = '';
 delete process.env.EMAIL_OUTBOX_DIR;

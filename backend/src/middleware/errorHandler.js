@@ -5,6 +5,46 @@ export function notFound(req, res, next) {
   next(ApiError.notFound(`Route not found: ${req.method} ${req.originalUrl}`));
 }
 
+const METHOD_ORDER = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'];
+
+// "/api/tickets" + "/:id/assign" → a case-insensitive regex for the full path (trailing slash
+// optional, as Express matches). Only literal and :param segments are used in this API; any
+// other syntax fails at startup instead of being matched wrongly.
+function routePattern(prefix, path) {
+  const full = `${prefix}${path === '/' ? '' : path}`;
+  if (/[*?{}()]/.test(full)) throw new Error(`methodNotAllowed: unsupported route syntax in ${full}`);
+  const source = full
+    .split('/')
+    .map((segment) => (segment.startsWith(':') ? '[^/]+' : segment.replace(/[.+^$|[\]\\]/g, '\\$&')))
+    .join('/');
+  return new RegExp(`^${source}/?$`, 'i');
+}
+
+// 405 METHOD_NOT_ALLOWED with an accurate Allow header when the path exists but not for this
+// method; unknown paths still reach notFound (404). `mounts` is the [prefix, router] list from
+// app.js; the routes are read once, after the routers are defined. HEAD is allowed wherever GET
+// is (Express answers it), and OPTIONS everywhere (the CORS middleware answers it).
+export function methodNotAllowed(mounts) {
+  const routes = mounts.flatMap(([prefix, router]) =>
+    router.stack
+      .filter((layer) => layer.route)
+      .map((layer) => ({
+        pattern: routePattern(prefix, layer.route.path),
+        methods: Object.keys(layer.route.methods).filter((m) => m !== '_all').map((m) => m.toUpperCase()),
+      })),
+  );
+
+  return (req, res, next) => {
+    const allowed = new Set(routes.filter((route) => route.pattern.test(req.path)).flatMap((route) => route.methods));
+    if (allowed.size === 0) return next();
+    if (allowed.has('GET')) allowed.add('HEAD');
+    allowed.add('OPTIONS');
+    const list = METHOD_ORDER.filter((method) => allowed.has(method)).join(', ');
+    res.set('Allow', list);
+    next(new ApiError(405, 'METHOD_NOT_ALLOWED', `${req.method} is not supported for ${req.path}. Allowed: ${list}`));
+  };
+}
+
 // Converts known library errors into the standard ApiError shape.
 function toApiError(err) {
   if (err instanceof ApiError) return err;

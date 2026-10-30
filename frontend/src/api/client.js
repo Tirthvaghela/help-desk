@@ -14,8 +14,8 @@ export function requestTokenOf(error) {
 
 // Small fetch wrapper. Throws an Error carrying the backend's
 // { error: { code, message } } shape so pages can show a clear message.
-export async function apiRequest(path, { method = 'GET', body, token } = {}) {
-  const headers = {};
+export async function apiRequest(path, { method = 'GET', body, token, headers: extraHeaders } = {}) {
+  const headers = { ...extraHeaders };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (token) headers.Authorization = `Bearer ${token}`;
 

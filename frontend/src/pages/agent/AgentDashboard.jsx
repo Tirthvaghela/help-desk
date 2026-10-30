@@ -1,29 +1,26 @@
-import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router";
 import HelpDeskHeader from "../../components/common/helpdeskheader.jsx";
 import AgentOverview from "../../components/agent/AgentOverview.jsx";
 import AgentInbox from "../../components/agent/AgentInbox.jsx";
+import { pageFromSearch, sameSearch, searchForPage } from "../../components/staff/dashboardUrl.js";
+
+const PAGES = ["Overview", "Inbox"];
+const URL_OPTIONS = { ticketPage: "Inbox" };
 
 export default function AgentDashboard() {
+  // The page lives in the address (?page=Inbox), so refresh and Back/Forward keep it.
+  // ?ticket=… (a notification, or "View Details" on the Overview) opens that ticket in the Inbox.
   const [searchParams, setSearchParams] = useSearchParams();
-  const [activePage, setActivePage] = useState(searchParams.get("page") === "Inbox" ? "Inbox" : "Overview");
-  // Ticket to open in the Inbox, e.g. from "View Details" on the Overview.
-  const [openTicketId, setOpenTicketId] = useState(null);
+  const activePage = pageFromSearch(searchParams, PAGES, URL_OPTIONS);
+  const openTicketId = activePage === "Inbox" ? searchParams.get("ticket") : null;
 
-  const openTicket = (ticketId) => {
-    setOpenTicketId(ticketId);
-    setActivePage("Inbox");
+  // One history entry per change; choosing the current page again adds none.
+  const navigate = (page, ticket) => {
+    const next = searchForPage(searchParams, page, PAGES, { ...URL_OPTIONS, ticket });
+    if (!sameSearch(next, searchParams)) setSearchParams(next);
   };
-
-  // Links such as /agent/dashboard?ticket=… (from a notification) open that ticket, then the
-  // address is cleaned up so a reload does not reopen it.
-  const linkedTicket = searchParams.get("ticket");
-  const linkedPage = searchParams.get("page");
-  useEffect(() => {
-    if (linkedTicket) openTicket(linkedTicket);
-    else if (linkedPage === "Inbox" || linkedPage === "Overview") setActivePage(linkedPage);
-    if (linkedTicket || linkedPage) setSearchParams({}, { replace: true });
-  }, [linkedTicket, linkedPage, setSearchParams]);
+  const setActivePage = (page) => navigate(page);
+  const openTicket = (ticketId) => navigate("Inbox", ticketId);
 
   return (
     <div className="relative min-h-screen overflow-x-hidden bg-[#b9dfd0] px-2 py-3 sm:px-5 sm:py-6 lg:px-10 lg:py-8">

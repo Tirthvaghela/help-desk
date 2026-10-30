@@ -46,6 +46,22 @@ export function canAccessTicket(user, ticket) {
   }
 }
 
+// Who may reply: the customer who owns the ticket, the agent it is assigned to, and any admin.
+// Agents can read unassigned tickets but must claim them before replying (D-11).
+export function canReplyToTicket(user, ticket) {
+  if (user?.role === 'agent') return sameId(ticket.assignedTo, user._id);
+  return canAccessTicket(user, ticket);
+}
+
+// The same rule as a database filter, for re-checking after a reply is stored.
+export function replyFilter(ticketId, user) {
+  return accessibleTicketFilter(ticketId, user, user?.role === 'agent' ? { assignedTo: user._id } : {});
+}
+
+export function replyForbidden() {
+  return ApiError.forbidden('Assign this ticket to yourself to reply');
+}
+
 // Filter for an atomic update of one ticket, so access is re-checked inside the update
 // itself, e.g. Ticket.findOneAndUpdate(accessibleTicketFilter(id, user, { status: 'open' }), …).
 export function accessibleTicketFilter(ticketId, user, conditions = {}) {
