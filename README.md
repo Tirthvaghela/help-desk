@@ -22,6 +22,7 @@ Ticket lifecycle: **Open → In Progress → Resolved**, with a timestamped repl
 - [Scripts](#scripts)
 - [Testing](#testing)
 - [Continuous integration](#continuous-integration)
+- [Deployment readiness](#deployment-readiness)
 - [API](#api)
 - [Troubleshooting](#troubleshooting)
 - [Git workflow](#git-workflow)
@@ -57,10 +58,16 @@ Ticket lifecycle: **Open → In Progress → Resolved**, with a timestamped repl
 | Customer profile: change own name | ✅ Implemented |
 | Account security: change password, change email (confirmed by email), forgot/reset password | ✅ Implemented (needs an email provider in production, see [Email](#email)) |
 | In-app notifications (ticket created, assigned, priority, status, resolved, replies) | ✅ Implemented (bell in every signed-in header) |
+| Email to the customer when their ticket's status changes | ✅ Implemented (needs SMTP in production, see [Email](#email)) |
+| SLA due dates (resolution targets per priority) | ✅ Implemented: stored on tickets, returned to staff, and shown as SLA badges in Agent Inbox and Admin Tickets (see [SLA due dates](#sla-due-dates)); not visible to customers |
+| Admin analytics (Reports tab: status, priority, category, resolution time, SLA, date ranges) | ✅ Implemented (see [Reports and analytics](#reports-and-analytics)) |
 | Safe database initialisation (default categories, first admin) | ✅ Implemented (`npm run seed:categories`, `npm run create:staff`) |
+| Duplicate ticket submissions (a retried or double-clicked submission returns the original ticket) | ✅ Implemented (`Idempotency-Key`, contract §7) |
+| Demo data for presentations (local databases only) | ✅ Implemented (`npm run seed:demo`, see [Demo data](#demo-data-optional-local-only)) |
+| User flows, wireframes, test evidence | 📝 [docs/USER_FLOWS.md](docs/USER_FLOWS.md), [docs/WIREFRAMES.md](docs/WIREFRAMES.md), [docs/TEST_EVIDENCE.md](docs/TEST_EVIDENCE.md) |
 | Backend tests (`node:test` + Supertest) and frontend unit tests (`node:test`) | ✅ Implemented |
 | API contract | 📝 [docs/API_CONTRACT.md](docs/API_CONTRACT.md); a few points are still open (see below) |
-| Deployment | ⏳ Planned (host to be confirmed with mentor) |
+| Deployment | ⏳ Not deployed yet: host and production database still to be chosen (see [Deployment readiness](#deployment-readiness)) |
 
 ## Tech stack
 
@@ -79,14 +86,16 @@ help-desk/
 ├── backend/
 │   ├── src/
 │   │   ├── config/        env.js + envRules.js (env checks), db.js (MongoDB connection)
-│   │   ├── controllers/   auth, customer tickets, agent tickets, comments, categories, admin users, stats
+│   │   ├── controllers/   auth, account security, customer tickets, agent tickets, comments, categories, admin users, notifications, stats and analytics
 │   │   ├── middleware/    auth.js (JWT + roles), rateLimit.js, errorHandler.js
-│   │   ├── models/        User, Category, Ticket, TicketComment, Counter
+│   │   ├── models/        User, Category, Ticket, TicketComment, Counter, AuthToken, Notification, TicketSubmission
 │   │   ├── routes/        one router per area, mounted in app.js
-│   │   ├── utils/         ApiError, validation, ticket access/query/serializers
+│   │   ├── services/      email.js (transports, background delivery), emailTemplates.js
+│   │   ├── utils/         ApiError, validation, ticket access/query/serializers, sla.js, analytics.js, dateParams.js, idempotency.js, notifications, ticket emails
 │   │   ├── app.js         Express app: middleware + route mounting
-│   │   └── server.js      Entry point: connect DB, then start listening
-│   ├── scripts/           seed-categories.js, create-staff.js (safe database initialisation)
+│   │   ├── server.js      Entry point: connect DB, then start listening
+│   │   └── startServer.js Port errors and graceful shutdown
+│   ├── scripts/           seed-categories.js, create-staff.js, check-categories.js, seed-demo.js (lib/: target guards, data)
 │   ├── test/              node:test + Supertest; helpers/ (isolated test database, factories)
 │   ├── .env.example
 │   └── package.json
@@ -99,14 +108,18 @@ help-desk/
 │   │   ├── pages/         HomePage (landing), customer/, agent/, admin/, StaffLogin, NotFoundPage
 │   │   ├── App.jsx        Routes
 │   │   └── main.jsx       Entry point
-│   ├── test/              node:test unit tests for the API layer and pure logic
+│   ├── test/              node:test unit tests for the API layer and pure logic; SlaBadge and AnalyticsPanels are rendered to HTML
 │   ├── .env.example
 │   └── package.json
 ├── .github/workflows/ci.yml   GitHub Actions: backend tests, frontend tests + build
 └── docs/
     ├── API_CONTRACT.md            Endpoints, request/response shapes, error codes, decisions
     ├── DATA_MODEL.md              Collections and fields
+    ├── USER_FLOWS.md              Customer, agent and admin flows; ticket lifecycle (diagrams)
+    ├── WIREFRAMES.md              Low-fidelity layouts of every screen
+    ├── TEST_EVIDENCE.md           What was tested, how, and the results
     └── CUSTOMER_TICKET_API_GAPS.md  History of the customer ticket API alignment
+```
 
 ## Prerequisites
 
@@ -130,11 +143,16 @@ cp .env.example .env      # Windows PowerShell: Copy-Item .env.example .env
 npm run dev               # http://localhost:4000
 ```
 
-You should see:
+You should see a summary of the settings in use, then the connection (the `Email` line names the transport, for example `outbox → backend/.outbox (nothing is sent)`):
 
 ```
+Database: "helpdesk"
+Email: …
+CORS origins: http://localhost:5173, …
+SLA resolution targets: high 24 h, medium 72 h, low 168 h (calendar hours)
 MongoDB connected: 127.0.0.1/helpdesk
 API listening on http://localhost:4000
+Category name index ready (unique, case-insensitive).
 ```
 
 ### Frontend (in a second terminal)
@@ -174,6 +192,32 @@ Rename all but one category in each group (admin dashboard → Categories), run 
 
 Sign in as the admin at http://localhost:5173/staff/login.
 
+### Demo data (optional, local only)
+
+For presentations, `seed:demo` fills a **local** database with a small, consistent Help Desk: the four default categories, staff and customers, and seven tickets covering every status and priority, some with replies and a status history. The tickets get SLA due dates from the same rule and settings as the API, and when seeded they show every SLA state, including one unresolved overdue ticket. A database seeded before SLAs existed keeps its tickets as they were (insert-only).
+
+```bash
+cd backend
+MONGODB_URI=mongodb://127.0.0.1:27017/helpdesk_demo npm run seed:demo
+# PowerShell: $env:MONGODB_URI='mongodb://127.0.0.1:27017/helpdesk_demo'; npm run seed:demo
+
+# Then start the API on the same database (the environment variable overrides backend/.env):
+MONGODB_URI=mongodb://127.0.0.1:27017/helpdesk_demo npm run dev
+```
+
+It **refuses** any remote database (including Atlas; there is no override), any database whose name does not end in `_demo`, `_dev` or `_test`, and `NODE_ENV=production`. It only inserts: running it again keeps every existing record unchanged, and it stops without writing if a demo email already belongs to an account with a different role.
+
+| Role | Name | Email | Signs in at |
+| --- | --- | --- | --- |
+| Admin | Meera Iyer | `admin.demo@example.com` | `/staff/login` |
+| Agent | Arjun Mehta | `arjun.agent.demo@example.com` | `/staff/login` |
+| Agent | Sara Thomas | `sara.agent.demo@example.com` | `/staff/login` |
+| Customer | Rohan Kapoor | `rohan.demo@example.com` | `/login` |
+| Customer | Ananya Rao | `ananya.demo@example.com` | `/login` |
+| Customer | Daniel Fernandes | `daniel.demo@example.com` | `/login` |
+
+**Demo-only password** for all six accounts: `HelpDeskDemo!2026` (or set `DEMO_PASSWORD` before seeding). It is public in this README, so never use it, or these accounts, on a real deployment. Names are fictional and `example.com` is a reserved domain, so no email reaches a real person.
+
 ## Environment variables
 
 Never commit `.env`. Only the `.env.example` files, which contain dummy values, belong in Git. If you add a variable, add it to the matching `.env.example` in the same pull request.
@@ -183,11 +227,12 @@ Never commit `.env`. Only the `.env.example` files, which contain dummy values, 
 | Variable | Required | Purpose | Example |
 | --- | --- | --- | --- |
 | `PORT` | No (default 4000) | API port | `4000` |
-| `MONGODB_URI` | Yes | MongoDB connection string | `mongodb://127.0.0.1:27017/helpdesk` |
+| `MONGODB_URI` | Yes | MongoDB connection string. **Name the database** after the host: without one MongoDB uses `test`; the server warns in development and refuses to start in production. The startup log shows the database in use. | `mongodb://127.0.0.1:27017/helpdesk`, `mongodb+srv://…mongodb.net/helpdesk?retryWrites=true` |
 | `JWT_SECRET` | Yes | Secret for signing login tokens | long random string |
 | `JWT_EXPIRES_IN` | No (default `1d`) | Login token lifetime (contract C-3, still open) | `1d`, `12h` |
-| `CLIENT_URL` | Yes | Frontend origin allowed by CORS | `http://localhost:5173` |
-| `NODE_ENV` | No (default `development`) | `production` turns on the strict `JWT_SECRET` check below | `production` |
+| `CLIENT_URL` | Yes | Frontend origin allowed by CORS, and the base for links in emails | `http://localhost:5173` |
+| `CORS_ORIGINS` | No | Extra frontend origins allowed by CORS, comma-separated exact origins (no paths, no `*`). Email links still use `CLIENT_URL`. | `http://localhost:5174,http://127.0.0.1:5173` |
+| `NODE_ENV` | No (default `development`) | `production` turns on the strict checks below (secret, database name, real email transport), HSTS over HTTPS and combined-format request logs | `production` |
 | `AUTH_RATE_LIMIT_MAX` | No (default 20; 0 in tests) | Sign-in and sign-up attempts allowed per client IP per window (separate budgets). `0` turns limiting off. | `20` |
 | `AUTH_RATE_LIMIT_WINDOW_MS` | No (default 900000 = 15 min) | Rate-limit window | `900000` |
 | `SENSITIVE_RATE_LIMIT_MAX` | No (default 5; 0 in tests) | Password-reset requests, reset-link attempts and password/email changes per IP per window | `5` |
@@ -197,15 +242,20 @@ Never commit `.env`. Only the `.env.example` files, which contain dummy values, 
 | `EMAIL_OUTBOX_DIR` | No | Folder for `outbox` emails | `backend/.outbox` (default) |
 | `PASSWORD_RESET_TTL_MINUTES` | No (default 30) | Reset-link lifetime | `30` |
 | `EMAIL_CHANGE_TTL_HOURS` | No (default 24) | Email-confirmation link lifetime | `24` |
-| `MONGODB_URI_TEST` | No | Test database for `npm test`. Name must end in `_test`. | `mongodb://127.0.0.1:27017/helpdesk_test` (default) |
+| `SLA_HOURS_HIGH`, `SLA_HOURS_MEDIUM`, `SLA_HOURS_LOW` | No (defaults 24, 72, 168) | Resolution target per priority, in whole calendar hours from 1 to 8760 (one year). Anything else stops the server at startup. See [SLA due dates](#sla-due-dates). | `24`, `72`, `168` |
+| `MONGODB_URI_TEST` | No | Test database for `npm test`. Name must end in `_test`. **Set it in the shell, not in this file:** the test setup reads it before dotenv loads `.env`, so a value in `.env` has no effect. | `mongodb://127.0.0.1:27017/helpdesk_test` (default) |
 
 The backend exits on startup with a clear message if a required variable is missing or MongoDB is unreachable. **With `NODE_ENV=production` it also refuses a `JWT_SECRET` shorter than 32 characters or equal to the `.env.example` placeholder** (the message never shows the secret). Development and test accept any non-empty value.
 
 ### Email
 
-Password reset, email-change confirmation and security notices are sent by `backend/src/services/email.js` (Nodemailer).
+Password reset, email-change confirmation, security notices and **ticket status emails** are sent by `backend/src/services/email.js` (Nodemailer).
 
-- **Development (default):** nothing is sent. Each email is written to `backend/.outbox/` (git-ignored) as a text file; open it to use the link. The folder contains one-time links, so do not share it.
+- **Ticket status emails:** when the assigned agent or an admin moves a ticket to *In progress* or *Resolved*, the ticket's customer (if their account is active) gets one email with the ticket number, their subject, the previous and new status and a link to the ticket. It never names the agent. It is sent in the background, so the API answers straight away; a failed delivery never undoes the change. A failure is logged with its purpose and error codes only (see [Known limitations](#known-limitations-and-open-decisions)). On shutdown the API waits up to 5 seconds for these emails.
+- **Templates:** ticket status and password reset emails share one HTML layout (tables and inline styles, for email clients) and have a plain-text version. The other account emails use a simpler layout.
+- **SMTP timeouts:** a connection attempt or the server's greeting is abandoned after 10 seconds, and an open connection after 20 seconds of silence, so an unresponsive email server never hangs a request or a shutdown.
+
+- **Development (default):** nothing is sent. Each email is written to `backend/.outbox/` (git-ignored) as a text file; open it to use the link. Only the plain-text part is saved, so the HTML design cannot be seen there. The folder contains one-time links, so do not share it.
 - **Production:** set `EMAIL_TRANSPORT=smtp`, `EMAIL_FROM` and `SMTP_HOST` (plus `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS` from your provider, e.g. Mailtrap, Brevo, SendGrid SMTP, Amazon SES SMTP or a Gmail app password). The server refuses to start in production with `outbox`/`memory`, or with `smtp` but no `SMTP_HOST`/`EMAIL_FROM`. `EMAIL_TRANSPORT=disabled` turns email off explicitly (password reset then cannot work).
 - **Links** in emails are built from `CLIENT_URL`, never from request headers.
 - Credentials only ever come from the environment; nothing is hard-coded.
@@ -226,17 +276,63 @@ node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
 
 `VITE_` variables are bundled into the browser code, so never put secrets in them.
 
+### SLA due dates
+
+Every new ticket gets a **due date by which it should be resolved** (an SLA resolution target; it is not a first-response target). The target depends on the priority:
+
+| Priority | Target | Setting |
+| --- | --- | --- |
+| High | 24 hours | `SLA_HOURS_HIGH` |
+| Medium | 72 hours | `SLA_HOURS_MEDIUM` |
+| Low | 168 hours (7 days) | `SLA_HOURS_LOW` |
+
+- **Calendar hours:** nights, weekends and holidays count; there are no business hours.
+- **Due date** = creation time + the target. It is stored on the ticket (`dueAt`) and returned to agents and admins only; customer-facing responses never include it.
+- **Priority changes** move the due date to creation time + the new priority's target (never "from now"), in the same update as the priority. Changing only the assignee, or the status, never moves it.
+- **Changing the settings** affects tickets created afterwards; existing tickets keep their due date until their priority changes.
+- **Older tickets** created before SLAs existed have no due date and are treated as "no SLA"; nothing is filled in for them.
+- **States:** met / missed (resolved on time or late), overdue (not resolved, past the due date), due soon (25% or less of the target left), due. They are worked out when needed: no background jobs run and no reminders are sent.
+
+**In the staff screens,** Agent Inbox and Admin Tickets show an SLA badge on every ticket, in the list and in the ticket details; the details also show the exact due date. The API provides `dueAt`, and the frontend works out the state and the time left or overdue from it, using the same rules as the backend. It never calculates a due date.
+
+| Badge | Example | Meaning |
+| --- | --- | --- |
+| Due | `Due in 2d 4h` | Not resolved, more than 25% of the target left |
+| Due soon | `Due soon · in 4h` | Not resolved, 25% or less left, up to and including the due date |
+| Overdue | `Overdue by 3h` | Not resolved, past the due date |
+| Met | `Met` | Resolved on or before the due date |
+| Missed | `Missed` | Resolved after the due date |
+| No SLA | `No SLA` | No due date (older tickets), or a resolved ticket with no resolution time recorded |
+
+The time shown updates whenever the screen renders again, for example after a change or a refresh; there is no timer. Customer screens show no SLA information.
+
+The startup log shows the targets in use, e.g. `SLA resolution targets: high 24 h, medium 72 h, low 168 h (calendar hours)`.
+
+### Reports and analytics
+
+The admin **Reports** tab shows figures from `GET /api/admin/analytics` (admins only; agents and customers get 403). Everything on the page, including Agent Performance and the CSV export, follows the selected range.
+
+- **Date basis:** every figure is for tickets **created** in the range, and shows their current state. The page says so, and shows the time the Overdue and Due soon figures were worked out.
+- **Ranges:** last 7, 30 or 90 days (rolling: N × 24 hours up to now), all time, or custom. A custom range includes both whole days in the browser's time zone and is sent as UTC instants. Blank, impossible, future or reversed dates are refused; they never fall back to all time.
+- **Average resolution time:** `resolvedAt − createdAt` for resolved tickets. Tickets with missing, invalid or negative times are left out and counted. `updatedAt` is never used. Resolved is final, so reopening does not affect it.
+- **SLA:** states come from the same rule as the badges. Met and Missed are resolved tickets; Due, Due soon and Overdue are unresolved tickets at that moment, so an overdue ticket is not counted as missed. No SLA is shown separately.
+- **SLA compliance:** Met ÷ (Met + Missed) × 100, rounded down to one decimal, shown with the number of tickets it covers. With none it says "No data" rather than 0%.
+- **No data versus zero:** if the request fails the page shows an error, a retry and `—`, never 0. A figure missing from a response shows "Unavailable". A range with no tickets shows real zeros and "No tickets in this period".
+
+The counts and the SLA figures are two separate reads, so a ticket changing during a request can make them differ by that ticket. Full definitions: [API contract §11](docs/API_CONTRACT.md).
+
 ## Scripts
 
 | Location | Command | What it does |
 | --- | --- | --- |
-| backend | `npm run dev` | Start the API with auto-restart on file changes (`node --watch`) |
+| backend | `npm run dev` | Start the API with auto-restart when files in `src/` change (`node --watch-path=src`). The first lines show the database, email transport and CORS origins in use. |
 | backend | `npm start` | Start the API (production) |
 | backend | `npm test` | Run backend tests |
 | backend | `npm run seed:categories` | Add the default categories if missing (see [First run](#first-run-initialise-the-database)) |
+| backend | `npm run seed:demo` | Add demo staff, customers and tickets to a local `*_demo`/`*_dev`/`*_test` database (see [Demo data](#demo-data-optional-local-only)) |
 | backend | `npm run create:staff` | Create an agent or admin account from `STAFF_*` variables |
 | backend | `npm run check:categories` | Read-only: list category names that differ only in case (they block the unique name index) |
-| frontend | `npm run dev` | Start the Vite dev server |
+| frontend | `npm run dev` | Start the Vite dev server on port 5173 (`--strictPort`: fails if the port is taken instead of moving to another) |
 | frontend | `npm test` | Run frontend unit tests |
 | frontend | `npm run build` | Production build into `frontend/dist/` |
 | frontend | `npm run preview` | Serve the production build locally |
@@ -251,14 +347,25 @@ npm test
 What the backend tests cover:
 
 - `authApi.test.js`, `auth.test.js`, `authSecurity.test.js`: sign-up, sign-in, tokens (expired, forged, deactivated, role changes), profile update, rate limiting, production configuration rules (secret, email)
-- `accountSecurity.test.js`: password change (sessions revoked), email change and confirmation, forgot/reset password (generic answers, valid/invalid/expired/reused links, cooldown), email failures, no tokens in responses or logs
+- `accountSecurity.test.js`: password change (sessions revoked), email change and confirmation, forgot/reset password (generic answers, valid/invalid/expired/reused links, cooldown), links voided after a password or email change, email failures, no tokens in responses or logs
 - `notifications.test.js`: who is notified for each ticket event (never the actor, no duplicates, access rules), list/count/mark-read endpoints, cross-user protection, links after access is lost
 - `customerTickets.test.js`: ticket creation (validation, `categoryId`, server-set fields) and `GET /my` (ownership, pages, filters)
 - `agentWorkflow.test.js`, `ticketAccess/Assign/Query/Status*.test.js`: queue, filters, access policy, assignment, status transitions, comments, the HD-104 scenario end to end
 - `categories.test.js`, `adminUsers.test.js`, `adminStats.test.js`: category and user management, `CANNOT_MODIFY_SELF`, statistics and date range
-- `health.test.js`, `errors.test.js`, `validate.test.js`, `models.test.js`, `db-helpers.test.js`: health check, error envelope, helpers, models, the test-database guard
+- `analytics.test.js`, `analyticsApi.test.js`: the analytics figures with a fixed clock (SLA states at exact boundaries and matching `slaState`, resolution time, categories, date ranges), access, date validation, and no personal data or ticket text in the response
+- `ticketOwnership.test.js`: the D-10 rules (no work on unassigned tickets, no release while in progress, resolved is final) and D-11 replies
+- `ticketIdempotency.test.js`: duplicate submissions with `Idempotency-Key`, including simultaneous requests and failure cases
+- `seedDemo.test.js`: the demo data guard, contents, repeat runs and existing records
+- `serverLifecycle.test.js`: startup errors (port in use) and graceful shutdown (including waiting for emails), on spare ports; the real-`SIGTERM` case is skipped on Windows
+- `sla.test.js`, `slaTickets.test.js`: SLA settings, due-date and state rules at exact boundaries (fixed dates), due dates on creation (including idempotent creation and replay), priority changes, older tickets without a due date, and staff-only visibility
+- `emailTemplates.test.js`: the ticket status and password reset emails (layout, HTML and plain-text parts, wording, links, escaping, the `Hi there,` fallback, no staff data, reset expiry, tokens never in logs)
+- `statusEmails.test.js`: ticket status emails (recipient, contents, escaping, no email for rejected or unrelated changes, inactive customers, delivery failures, background delivery), the outbox transport and SMTP timeouts
+- `logPrivacy.test.js`: simulated SMTP rejections quoting the address on each email path, and request-log redaction, leave no address, link or server reply in the logs
+- `health.test.js`, `errors.test.js`, `validate.test.js`, `models.test.js`, `db-helpers.test.js`, `envConfig.test.js`, `securityHeaders.test.js`, `methodNotAllowed.test.js`: health check, error envelope, helpers, models, the test-database guard, configuration rules, security headers, `405` responses
 
-**Your development data is safe.** `npm test` always uses `MONGODB_URI_TEST` (default `mongodb://127.0.0.1:27017/helpdesk_test`) and ignores `MONGODB_URI` in your `.env`. The helpers in `test/helpers/db.js` refuse to connect to or clear any database whose name does not end in `_test`.
+Latest results and the browser checks performed are recorded in [docs/TEST_EVIDENCE.md](docs/TEST_EVIDENCE.md).
+
+**Your development data is safe.** `npm test` always uses `MONGODB_URI_TEST` from the shell (default `mongodb://127.0.0.1:27017/helpdesk_test`) and ignores `MONGODB_URI` in your `.env`. The test setup reads it before dotenv loads `.env`, so it cannot be set there. The helpers in `test/helpers/db.js` refuse to connect to or clear any database whose name does not end in `_test`.
 
 Most tests do not need MongoDB. Tests that do need it are **skipped** (shown as `# SKIP` with a reason) if MongoDB is not running. Set `REQUIRE_TEST_DB=1` to make them **fail** instead; CI always does this.
 
@@ -269,7 +376,7 @@ Most tests do not need MongoDB. Tests that do need it are **skipped** (shown as 
 - For database tests, call `connectTestDB()` in `before`, `clearTestDB()` in `beforeEach`, and `disconnectTestDB()` in `after`. See `test/health.test.js` for the pattern.
 - Test files run one at a time, so they never clear each other's data.
 
-**Frontend:** `cd frontend && npm test` runs unit tests with Node's built-in runner (no extra dependencies): the API layer against a fake `fetch` (methods, URLs, bodies, error handling), form validation, session storage, status rules, display helpers and the CSV export. Screens are verified with real-browser workflows (customer, agent, admin, cross-role, backend outages, layouts); those scripts are not part of the repository yet. Run `npm run build` to check the app compiles.
+**Frontend:** `cd frontend && npm test` runs unit tests with Node's built-in runner (no extra dependencies): the API layer against a fake `fetch` (methods, URLs, bodies, error handling), form validation, session storage, status rules, display helpers, staff filters and paging, status-history display, the CSV export, SLA states and badges, analytics ranges and panels, and the New Ticket category messages. `SlaBadge` and `AnalyticsPanels` are rendered to HTML. Other screens are verified with real-browser workflows (customer, agent, admin, cross-role, backend outages, layouts), listed in [docs/TEST_EVIDENCE.md](docs/TEST_EVIDENCE.md); those scripts are not part of the repository yet. Run `npm run build` to check the app compiles.
 
 ## Continuous integration
 
@@ -297,6 +404,49 @@ npm test
 npm run build
 ```
 
+## Deployment readiness
+
+**Not deployed yet.** The hosting provider and the production database are still to be chosen, so nothing below assumes a particular host. The app deploys as two parts: the API (a Node web service) and the frontend (static files).
+
+| | Backend (API) | Frontend |
+| --- | --- | --- |
+| Install | `cd backend && npm ci` | `cd frontend && npm ci` |
+| Build | none | `npm run build` → `frontend/dist/` |
+| Start | `npm start` (`node src/server.js`), Node 22.12 or newer | serve `frontend/dist/` as a static site |
+| Health check | `GET /api/health`: **200** `{"status":"ok","database":"connected",…}`; **503** `{"status":"degraded","database":"disconnected",…}` when MongoDB is unreachable. It only reads the connection state, so it is cheap to poll. | |
+
+**Backend environment variables** (set them in the host's secret settings, never in Git; values are described in [Environment variables](#environment-variables)):
+
+- Required: `NODE_ENV=production`, `MONGODB_URI` (the production database, **with the database name** in the URI), `JWT_SECRET` (at least 32 random characters), `CLIENT_URL` (the deployed frontend's origin, e.g. `https://…`, no path).
+- Email: `EMAIL_TRANSPORT=smtp` with `EMAIL_FROM`, `SMTP_HOST` and usually `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`. Production refuses `outbox` and `memory`. `EMAIL_TRANSPORT=disabled` starts without email, but then **password reset and email changes cannot complete**: the screens confirm that a link was sent, and none arrives.
+- Optional: `PORT` (most hosts set it), `CORS_ORIGINS`, `JWT_EXPIRES_IN`, the rate-limit and link-lifetime settings.
+
+The API refuses to start, with a message naming the problem, if a required variable is missing, the secret is weak or the example placeholder, the URI names no database, or production email is misconfigured.
+
+**Frontend:** `VITE_API_URL` (the deployed API's URL) is read **at build time** and built into the files: set it before `npm run build`. Without it the build points at `http://localhost:4000`.
+
+**Frontend routes:** the app uses browser routes (`/tickets/…`, `/agent/dashboard`, `/admin/dashboard?ticket=…`). The static host must answer every path that is not a file with `index.html` (a "rewrite to index.html" or "single-page app" setting); otherwise refreshing a page or opening a link gives 404.
+
+**CORS:** the API answers only `CLIENT_URL` (plus any `CORS_ORIGINS`), compared exactly: scheme, host and port, no trailing slash. Links in emails also use `CLIENT_URL`.
+
+**Known gaps before the first deployment** (not fixed yet):
+
+| Gap | Effect | Planned fix |
+| --- | --- | --- |
+| Express `trust proxy` is not configured | Behind the host's HTTPS proxy every request appears to come from the proxy: sign-in rate limits are shared by all users, and HSTS is never sent | `TRUST_PROXY`, below, once the host is chosen |
+| Rate limits are kept in memory | Correct for one instance only | Run a single instance, or add a shared store later |
+
+**Startup and shutdown** (`backend/src/startServer.js`): a port that cannot be opened is reported ("port … is already in use") and the process exits with status 1. On `SIGTERM` (sent by hosts on redeploy, and by `npm run dev` when it restarts) or `SIGINT` (Ctrl+C), the API stops accepting connections, lets requests in progress finish, closes idle connections, waits up to 5 seconds for ticket status emails still being sent, disconnects MongoDB and exits 0; after 10 seconds in total it gives up and exits 1. The forgot-password email is sent after its response and is not waited for, so a shutdown at that moment can lose it; the customer can request another link.
+
+**`TRUST_PROXY` (proposed, not implemented yet).** It tells the API how many proxies sit in front of it, so that `req.ip` is the real client (rate limits) and `req.secure` reflects HTTPS at the proxy (HSTS).
+
+- Values: unset, empty or `0` = no proxy (today's behaviour, right for local development); a whole number `1`–`10` = that many proxies, each adding the client address to `X-Forwarded-For`. Anything else (`true`, `*`, negative, text) is refused at startup: trusting every proxy would let a client choose its own address and bypass rate limits.
+- The number must match the host's actual setup and is set only after the host is chosen. Check it once deployed: with the setting in place, two different networks (e.g. Wi-Fi and a phone hotspot) must get separate sign-in limits, and a request with a made-up `X-Forwarded-For` must still be counted against its real address.
+
+**Data:** `npm run seed:demo` refuses remote databases. On a new production database, run `npm run seed:categories -- --allow-remote` and create the first admin with `npm run create:staff -- --allow-remote` (see [First run](#first-run-initialise-the-database)); never use the public demo password there.
+
+**After deploying, check:** `/api/health` returns 200; customer sign-up, ticket creation and an agent reply work from the deployed frontend (no CORS errors in the browser console); refreshing `/tickets` and a staff dashboard works; a password-reset email arrives (if SMTP is configured); the host's logs show the startup summary (database name, email transport, CORS origins) and request lines.
+
 ## API
 
 The full API, with request/response shapes and error codes, is in **[docs/API_CONTRACT.md](docs/API_CONTRACT.md)**. Change it through a pull request when something needs to change. All endpoints below are implemented and tested.
@@ -316,7 +466,7 @@ The full API, with request/response shapes and error codes, is in **[docs/API_CO
 | GET | `/api/notifications/unread-count` | Signed in | `{ unreadCount }` |
 | PATCH / POST | `/api/notifications/:id/read`, `/api/notifications/read-all` | Signed in | Mark one / all of your own as read |
 | POST | `/api/tickets` | Customer | Raise a ticket `{ subject, description, categoryId, priority? }` → `{ ticket }` |
-| GET | `/api/tickets/my` | Customer | Own tickets: `status`, `page`, `limit` → `{ tickets, page, limit, total }` |
+| GET | `/api/tickets/my` | Customer | Own tickets: `status`, `priority`, `category`, `q`, `page`, `limit` → `{ tickets, page, limit, total }` |
 | GET | `/api/tickets` | Agent\*, Admin | Queue: `status`, `priority`, `category`, `assignee` (`me`/`unassigned`/id), `q`, `page`, `limit` |
 | GET | `/api/tickets/:id` | Owner, Agent\*, Admin | Ticket with description and status history |
 | PATCH | `/api/tickets/:id/assign` | Agent\*, Admin | `{ assignedTo?, priority? }`; agents can only claim or release |
@@ -329,6 +479,7 @@ The full API, with request/response shapes and error codes, is in **[docs/API_CO
 | PATCH | `/api/admin/users/:id/role` | Admin | `{ role }`; not on yourself (`CANNOT_MODIFY_SELF`) |
 | PATCH | `/api/admin/users/:id/status` | Admin | `{ isActive }`; not on yourself |
 | GET | `/api/admin/stats` | Admin | Totals by status, category, priority, assignee; optional `from` date |
+| GET | `/api/admin/analytics` | Admin | Reports figures for tickets created in an inclusive `from`..`to` range (see [Reports and analytics](#reports-and-analytics)) |
 
 Agent\* = unassigned tickets and tickets assigned to that agent (contract OPEN-1).
 
@@ -352,7 +503,7 @@ if (!canView) throw ApiError.forbidden();                                       
 
 Express 5 forwards errors thrown in `async` route handlers automatically, so no `try/catch` or wrapper is needed. Mongoose validation errors, invalid ObjectIds and duplicate keys are converted to 400, 400 and 409 automatically.
 
-**Decided** (see the contract, Section 1): JWT Bearer tokens (OPEN-2) and the agent access policy (OPEN-1), both implemented. The engineering defaults D-1 to D-9 are implemented and waiting for the owners' review.
+**Decided** (see the contract, Section 1): JWT Bearer tokens (OPEN-2) and the agent access policy (OPEN-1), both implemented. The engineering defaults D-1 to D-9 are implemented and waiting for the owners' review. D-10 (ticket ownership) and D-11 (who may reply) are also implemented.
 
 ## Troubleshooting
 
@@ -361,11 +512,12 @@ Express 5 forwards errors thrown in `async` route handlers automatically, so no 
 | `Missing environment variables: …` on backend start | You have not created `backend/.env`. Copy it from `.env.example`. |
 | `Could not connect to MongoDB: connect ECONNREFUSED 127.0.0.1:27017` | MongoDB is not running. Start the MongoDB service (Windows: Services → MongoDB Server, or `net start MongoDB` as administrator; macOS: `brew services start mongodb-community`), or point `MONGODB_URI` at Atlas. |
 | Atlas connection times out | Add your IP address under Atlas → Network Access, and check the username/password in the URI. |
-| `EADDRINUSE: address already in use :::4000` | Another process is using the port. Stop it, or change `PORT` in `backend/.env` **and** `VITE_API_URL` in `frontend/.env`. |
+| `Could not start the API: port 4000 is already in use` | Another process is using the port. Stop it, or change `PORT` in `backend/.env` **and** `VITE_API_URL` in `frontend/.env`. |
 | Frontend shows "Cannot reach the server" | The backend is not running, or `VITE_API_URL` is wrong. Restart `npm run dev` in `frontend` after changing `.env`. |
-| Browser console shows a CORS error | `CLIENT_URL` in `backend/.env` must exactly match the frontend address (including port), e.g. `http://localhost:5173`. Restart the backend afterwards. |
+| Browser console shows a CORS error | The frontend address (including port) must be `CLIENT_URL` or listed in `CORS_ORIGINS` in `backend/.env`, e.g. `http://localhost:5173`. Restart the backend afterwards. |
+| Frontend `npm run dev` fails with "Port 5173 is already in use" | Another dev server holds the port (Vite no longer silently moves to 5174, which the API would refuse). Stop it, or run `npx vite --port 5174 --strictPort` and add `http://localhost:5174` to `CORS_ORIGINS`. |
 | Health check shows `503` / `database: disconnected` | The API is running but lost its MongoDB connection. Check that MongoDB is still running. |
-| A database test shows `# SKIP MongoDB is not reachable` | Start MongoDB, or set `MONGODB_URI_TEST`. |
+| A database test shows `# SKIP MongoDB is not reachable` | Start MongoDB, or set `MONGODB_URI_TEST` in the shell. |
 | `npm test` says `Refusing to use database …` | `MONGODB_URI_TEST` points at a database whose name does not end in `_test`. |
 | `npm install` fails with `EBUSY` / `EPERM` on Windows | The folder is inside OneDrive or another synced folder. Pause syncing or move the project to a non-synced folder such as `C:\dev\help-desk`. |
 | `node: bad option: --watch` or Vite engine errors | Your Node.js is too old. Install Node 22 LTS. |
@@ -388,11 +540,12 @@ Express 5 forwards errors thrown in `async` route handlers automatically, so no 
 | Token storage (C-6) | `sessionStorage`: survives a reload, ends when the tab closes | Confirm |
 | Logout (C-7) | Signing out discards the token in the browser. A password change or reset signs the user out everywhere (token version), and deactivation blocks tokens immediately; there is no single-session server logout. | Confirm |
 | Email delivery | Development writes emails to `backend/.outbox/`; production needs SMTP settings | Choose a provider and add its credentials |
-| Notifications | In-app only, refreshed every minute while the page is visible; no email or push notifications | Product decision |
+| Notifications | In-app for every ticket event, refreshed every minute while the page is visible. Email only to customers, for status changes; no push notifications and no email opt-out | Product decision |
 | Internal notes | Not implemented: every reply is visible to the customer | Product decision |
 | Reopening resolved tickets | Status only moves forward (D-3); replies on resolved tickets are allowed | Product decision |
 | Rate limiting | In memory, per process | Shared store if the API runs as several processes |
 | Deactivated or demoted agents | Their assigned tickets stay assigned; admins see and can reassign them | Confirm |
+| Personal data in server logs | Failed emails log only their purpose and error codes, and request logs leave out query strings, also in the referrer. Tested with simulated SMTP errors, not a live server. Request logs still show URL paths as sent (and client IP and user agent in production). Unexpected server errors are logged in full. | Review before production |
 
 ## Roadmap
 
@@ -400,5 +553,5 @@ Express 5 forwards errors thrown in `async` route handlers automatically, so no 
 2. Project setup: skeletons, DB connection, `.env.example`, `/api/health`, test setup (**done**)
 3. Parallel modules: auth, tickets, agent workflow, conversations, admin, UI screens (**done**)
 4. Integration: the HD-104 scenario end to end in the UI (**done**, verified in a real browser)
-5. Testing and refinement against the acceptance criteria (**in progress**)
-6. Deployment and demo
+5. Testing and refinement against the acceptance criteria (**done**; see [docs/TEST_EVIDENCE.md](docs/TEST_EVIDENCE.md))
+6. Deployment and demo (**next**; see [Deployment readiness](#deployment-readiness))

@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router";
+import { pageFromSearch, sameSearch, searchForPage } from "../../components/staff/dashboardUrl.js";
 import HelpDeskHeader from "../../components/common/helpdeskheader.jsx";
 import AdminOverview from "../../components/admin/AdminOverview.jsx";
 import AdminTickets from "../../components/admin/AdminTickets.jsx";
@@ -7,25 +7,21 @@ import AdminUsers from "../../components/admin/AdminUsers.jsx";
 import AdminCategories from "../../components/admin/AdminCategories.jsx";
 import AdminReports from "../../components/admin/AdminReports.jsx";
 
-export default function AdminDashboard() {
-  const PAGES = ["Overview", "Tickets", "Users", "Categories", "Reports"];
-  const [searchParams, setSearchParams] = useSearchParams();
-  const [activePage, setActivePage] = useState(() => (PAGES.includes(searchParams.get("page")) ? searchParams.get("page") : "Overview"));
-  // Ticket whose details open on the Tickets page, e.g. from a notification link.
-  const [openTicketId, setOpenTicketId] = useState(null);
+const PAGES = ["Overview", "Tickets", "Users", "Categories", "Reports"];
+const URL_OPTIONS = { ticketPage: "Tickets" };
 
-  // Links such as /admin/dashboard?ticket=… or ?page=Users; the address is cleaned up after.
-  const linkedTicket = searchParams.get("ticket");
-  const linkedPage = searchParams.get("page");
-  useEffect(() => {
-    if (linkedTicket) {
-      setOpenTicketId(linkedTicket);
-      setActivePage("Tickets");
-    } else if (PAGES.includes(linkedPage)) {
-      setActivePage(linkedPage);
-    }
-    if (linkedTicket || linkedPage) setSearchParams({}, { replace: true });
-  }, [linkedTicket, linkedPage, setSearchParams]);
+export default function AdminDashboard() {
+  // The page lives in the address (?page=Users), so refresh and Back/Forward keep it.
+  // ?ticket=… (e.g. from a notification) opens that ticket's details on the Tickets page.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activePage = pageFromSearch(searchParams, PAGES, URL_OPTIONS);
+  const openTicketId = activePage === "Tickets" ? searchParams.get("ticket") : null;
+
+  // One history entry per page change; choosing the current page again adds none.
+  const setActivePage = (page) => {
+    const next = searchForPage(searchParams, page, PAGES, URL_OPTIONS);
+    if (!sameSearch(next, searchParams)) setSearchParams(next);
+  };
 
   const pageDescriptions = {
     Overview:

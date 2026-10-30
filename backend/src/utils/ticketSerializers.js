@@ -1,5 +1,6 @@
 // Response shapes from the API contract (§3). Fields are copied one by one, so a
 // populated document can never leak anything else (e.g. passwordHash or other users' emails).
+import { toValidDate } from './sla.js';
 
 // Populate options that load only what the serializers below need.
 export const USER_SUMMARY_FIELDS = 'name role';
@@ -32,7 +33,9 @@ export function serializeCategorySummary(category) {
 }
 
 // Full ticket for detail and update responses; list items omit description and statusHistory.
-export function serializeTicket(ticket, { detail = false } = {}) {
+// `staff`: the reader is an agent or admin, who also gets the SLA due date (`dueAt`, null on
+// tickets from before SLAs). Customers never get it (approved: not customer-visible yet).
+export function serializeTicket(ticket, { detail = false, staff = false } = {}) {
   const result = {
     id: idOf(ticket),
     ticketNumber: ticket.ticketNumber,
@@ -58,6 +61,7 @@ export function serializeTicket(ticket, { detail = false } = {}) {
     updatedAt: ticket.updatedAt,
     resolvedAt: ticket.resolvedAt ?? null,
   });
+  if (staff) result.dueAt = toValidDate(ticket.dueAt);
   return result;
 }
 

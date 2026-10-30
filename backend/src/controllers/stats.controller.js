@@ -2,6 +2,8 @@ import { Ticket } from '../models/Ticket.js';
 import { Category } from '../models/Category.js';
 import { User } from '../models/User.js';
 import { ApiError } from '../utils/ApiError.js';
+import { buildAnalytics } from '../utils/analytics.js';
+import { isValidIsoDate, parseDateRange } from '../utils/dateParams.js';
 import { normalizeStatusCounts } from '../utils/ticketStats.js';
 import { readParam } from '../utils/ticketQuery.js';
 import { TICKET_PRIORITIES } from '../utils/ticketConstants.js';
@@ -17,34 +19,6 @@ import { serializeUserSummary, USER_SUMMARY_FIELDS } from '../utils/ticketSerial
 //   unresolvedByPriority  { low, medium, high } — open + in progress
 //   unassigned            unresolved tickets with no assignee
 //   byAssignee            [{ assignee: UserSummary, total, byStatus }] — assigned tickets
-
-// ISO 8601 only: a date (UTC midnight) or a date-time with Z or an offset. `new Date()` alone
-// would accept "1" (year 2001), "10/29/2026" in the server's time zone, roll "2026-02-31"
-// over to March, turn "T24:00" into the next day, and accept offsets such as "+23:59".
-// Every part is therefore range-checked here before `new Date()` does the conversion.
-const ISO_DATE_PATTERN =
-  /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,3})?)?(?:Z|[+-](\d{2}):(\d{2})))?$/;
-// Real UTC offsets run from -12:00 to +14:00.
-const MAX_OFFSET_MINUTES = 14 * 60;
-
-function isValidIsoDate(raw) {
-  const match = ISO_DATE_PATTERN.exec(raw);
-  if (!match) return false;
-  const [year, month, day, hour = 0, minute = 0, second = 0, offsetHours = 0, offsetMinutes = 0] = match
-    .slice(1)
-    .map((part) => (part === undefined ? undefined : Number(part)));
-  const calendarDay = new Date(Date.UTC(year, month - 1, day));
-  return (
-    calendarDay.getUTCFullYear() === year &&
-    calendarDay.getUTCMonth() === month - 1 &&
-    calendarDay.getUTCDate() === day &&
-    hour <= 23 &&
-    minute <= 59 &&
-    second <= 59 &&
-    offsetMinutes <= 59 &&
-    offsetHours * 60 + offsetMinutes <= MAX_OFFSET_MINUTES
-  );
-}
 
 function parseFrom(query) {
   const raw = readParam(query, 'from');
@@ -136,4 +110,11 @@ export async function getStats(req, res) {
     unassigned: result?.unassigned?.[0]?.count ?? 0,
     byAssignee,
   });
+}
+
+// GET /api/admin/analytics (API contract §11): the Reports figures, for tickets created in the
+// optional range `from`..`to` (both inclusive).
+export async function getAnalytics(req, res) {
+  const { from, to } = parseDateRange(req.query);
+  res.json(await buildAnalytics({ from, to, now: new Date() }));
 }

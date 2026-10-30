@@ -3,6 +3,7 @@ import { User } from '../models/User.js';
 import { ApiError } from './ApiError.js';
 import { requireOneOf } from './validate.js';
 import { TICKET_PRIORITIES } from './ticketConstants.js';
+import { ticketResolvedError } from './ticketStatus.js';
 
 // Validates the body of PATCH /api/tickets/:id/assign (API contract §8) and returns
 // only the fields that may be applied: { assignedTo?, priority? }.
@@ -55,6 +56,23 @@ export function assertAssignmentAllowed(actor, assignedTo) {
     throw ApiError.forbidden('Agents can only assign tickets to themselves');
   }
   throw ApiError.forbidden();
+}
+
+// D-10 state rules for PATCH /assign on a loaded ticket ({ status }):
+//   resolved                      → 400 TICKET_RESOLVED (no assignee or priority changes)
+//   in progress, assignedTo: null → 400 ASSIGNEE_REQUIRED (reassign instead of releasing)
+// Checked after the permission (D-1) and eligibility (D-2) checks, so their errors are unchanged.
+export function assertAssignmentStateAllowed(ticket, update) {
+  if (ticket.status === 'resolved') throw ticketResolvedError();
+  if (update.assignedTo === null && ticket.status === 'in_progress') {
+    throw ApiError.badRequest('An in-progress ticket must keep an assignee; reassign it instead', 'ASSIGNEE_REQUIRED');
+  }
+}
+
+// Extra conditions for the atomic assignment update, matching the rules above, so a status
+// change in between cannot slip a release past them.
+export function assignmentUpdateConditions(update) {
+  return update.assignedTo === null ? { status: 'open' } : { status: { $ne: 'resolved' } };
 }
 
 // Contract D-2: the assignee must be an existing, active agent or admin. Returns the user,

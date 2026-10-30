@@ -1,7 +1,7 @@
 import { Ticket } from '../models/Ticket.js';
 import { TicketComment, COMMENT_MAX_LENGTH } from '../models/TicketComment.js';
 import { ApiError } from '../utils/ApiError.js';
-import { accessibleTicketFilter, findAccessibleTicket } from '../utils/ticketAccess.js';
+import { canReplyToTicket, findAccessibleTicket, replyFilter, replyForbidden } from '../utils/ticketAccess.js';
 import { requireString } from '../utils/validate.js';
 import { serializeComment, USER_SUMMARY_FIELDS } from '../utils/ticketSerializers.js';
 import { notifyComment } from '../utils/notifications.js';
@@ -26,15 +26,18 @@ export async function addComment(req, res) {
   // Only `message` is read; author, ticket and createdAt are set by the server.
   const message = requireString(req.body.message, 'message', { max: COMMENT_MAX_LENGTH });
   const ticket = await findAccessibleTicket(req.params.id, req.user);
+  // Agents reply only to tickets assigned to them (D-11); reading is still allowed.
+  if (!canReplyToTicket(req.user, ticket)) throw replyForbidden();
 
   const comment = await TicketComment.create({ ticket: ticket._id, author: req.user._id, message });
 
   // Access may have been revoked (e.g. the ticket reassigned) between the check above and
   // the insert. Re-check with the database filter and undo the comment if so. The standalone
   // MongoDB used here does not support transactions.
-  if (!(await Ticket.exists(accessibleTicketFilter(ticket._id, req.user)))) {
+  if (!(await Ticket.exists(replyFilter(ticket._id, req.user)))) {
     await TicketComment.deleteOne({ _id: comment._id });
-    await findAccessibleTicket(req.params.id, req.user); // throws the current 404 or 403
+    const current = await findAccessibleTicket(req.params.id, req.user); // throws the current 404 or 403
+    if (!canReplyToTicket(req.user, current)) throw replyForbidden();
     throw ApiError.forbidden('You do not have access to this ticket');
   }
 

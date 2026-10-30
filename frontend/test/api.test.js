@@ -148,6 +148,48 @@ describe('ticket API', () => {
     assert.deepEqual(ticket, { id: 't1' });
     assert.deepEqual(calls[0].body, { subject: 's', description: 'd', categoryId: 'c1', priority: 'low' });
     assert.equal(calls[0].url, `${BASE}/api/tickets`);
+    assert.equal(calls[0].headers['Idempotency-Key'], undefined, 'no key unless one is given');
+  });
+
+  it('createTicket sends the Idempotency-Key header with the same body', async () => {
+    respond = () => ({ status: 201, body: { ticket: { id: 't1' } } });
+    const fields = { subject: 's', description: 'd', categoryId: 'c1', priority: 'low' };
+    await tickets.createTicket('tok', fields, { idempotencyKey: 'key-0001' });
+    assert.equal(calls[0].headers['Idempotency-Key'], 'key-0001');
+    assert.equal(calls[0].headers.Authorization, 'Bearer tok');
+    assert.deepEqual(calls[0].body, fields);
+  });
+
+  it('a replayed response (200) is returned like a new one', async () => {
+    respond = () => ({ status: 200, body: { ticket: { id: 't1', ticketNumber: 'HD-7' } } });
+    const ticket = await tickets.createTicket('tok', { subject: 's' }, { idempotencyKey: 'key-0001' });
+    assert.deepEqual(ticket, { id: 't1', ticketNumber: 'HD-7' });
+  });
+
+  it('newIdempotencyKey: random keys in the format the API accepts', () => {
+    const keys = new Set(Array.from({ length: 50 }, () => tickets.newIdempotencyKey()));
+    assert.equal(keys.size, 50);
+    for (const key of keys) assert.match(key, /^[A-Za-z0-9_-]{8,128}$/);
+  });
+
+  it('submissionFor reuses the key while the content is unchanged and makes a new one when it changes', () => {
+    let n = 0;
+    const makeKey = () => `key-${++n}`;
+    const fields = { subject: 'Printer jam', description: 'It jams on page two.', categoryId: 'c1', priority: 'low' };
+    const first = tickets.submissionFor(null, fields, makeKey);
+    assert.equal(first.key, 'key-1');
+    assert.equal(tickets.submissionFor(first, { ...fields }, makeKey), first, 'retry of the same content: same key');
+    const edited = tickets.submissionFor(first, { ...fields, priority: 'high' }, makeKey);
+    assert.equal(edited.key, 'key-2', 'changed content: a new submission');
+    assert.equal(tickets.submissionFor(edited, fields, makeKey).key, 'key-3', 'changing it back is again a new submission');
+  });
+
+  it('ticketErrorMessage shows the server message for the idempotency conflicts', () => {
+    const inUse = { status: 409, code: 'IDEMPOTENCY_KEY_IN_USE', message: 'This ticket is still being submitted. Please try again in a moment.' };
+    const reused = { status: 409, code: 'IDEMPOTENCY_KEY_REUSED', message: 'This Idempotency-Key was already used for a different ticket.' };
+    assert.equal(tickets.ticketErrorMessage(inUse), inUse.message);
+    assert.equal(tickets.ticketErrorMessage(reused), reused.message);
+    assert.match(tickets.ticketErrorMessage({ status: 409, code: 'CONFLICT' }), /changed by someone else/);
   });
 
   it('listMyTickets and listQueue pass filters and pagination as query parameters', async () => {
@@ -156,6 +198,16 @@ describe('ticket API', () => {
     await tickets.listQueue('tok', { status: 'all', assignee: 'me', q: 'HD-1', priority: 'high' });
     assert.equal(calls[0].url, `${BASE}/api/tickets/my?status=resolved&page=2&limit=10`);
     assert.equal(calls[1].url, `${BASE}/api/tickets?assignee=me&q=HD-1&priority=high`);
+  });
+
+  it('listQueue sends category and assignee with the other filters, and drops "all"', async () => {
+    respond = () => ({ status: 200, body: { tickets: [], page: 1, limit: 25, total: 0 } });
+    await tickets.listQueue('tok', { status: 'open', priority: 'high', category: 'c1', assignee: 'unassigned', q: 'printer', page: 2, limit: 25 });
+    await tickets.listQueue('tok', { status: 'all', priority: 'all', category: undefined, assignee: 'u42' });
+    await tickets.listQueue('tok', { category: 'all', assignee: 'all' });
+    assert.equal(calls[0].url, `${BASE}/api/tickets?status=open&priority=high&category=c1&assignee=unassigned&q=printer&page=2&limit=25`);
+    assert.equal(calls[1].url, `${BASE}/api/tickets?assignee=u42`);
+    assert.equal(calls[2].url, `${BASE}/api/tickets`);
   });
 
   it('assign, status and comment calls use the documented methods and bodies', async () => {
@@ -183,6 +235,61 @@ describe('ticket API', () => {
     assert.match(tickets.ticketErrorMessage({ status: 409 }), /changed by someone else/);
     assert.equal(tickets.ticketErrorMessage({ status: 400, message: 'subject is required' }), 'subject is required');
     assert.match(tickets.ticketErrorMessage({ status: 500, message: 'stack trace' }), /server had a problem/);
+    // D-10 refusals are 400s with a message meant for the user.
+    assert.equal(tickets.ticketErrorMessage({ status: 400, code: 'ASSIGNEE_REQUIRED', message: 'Assign the ticket before starting work' }), 'Assign the ticket before starting work');
+    assert.equal(tickets.ticketErrorMessage({ status: 400, code: 'TICKET_RESOLVED', message: 'This ticket is resolved and can no longer be changed' }), 'This ticket is resolved and can no longer be changed');
+  });
+});
+
+// D-10 / D-11: which staff controls are offered (the backend enforces the same rules).
+describe('ticketPermissions', () => {
+  const ana = { id: 'ana', role: 'agent' };
+  const ada = { id: 'ada', role: 'admin' };
+  const ticket = (status, assignee) => ({ status, assignedTo: assignee ? { id: assignee } : null });
+
+  it('unassigned open ticket: nobody can start it; agents can claim but not reply; admins can reply', () => {
+    for (const user of [ana, ada]) {
+      const p = tickets.ticketPermissions(ticket('open', null), user);
+      assert.equal(p.nextStatus, null);
+      assert.equal(p.statusHint, 'Assign the ticket before starting work.');
+      assert.equal(p.canChangeAssignee, true);
+      assert.equal(p.canUnassign, true);
+    }
+    assert.equal(tickets.ticketPermissions(ticket('open', null), ana).canReply, false);
+    assert.equal(tickets.ticketPermissions(ticket('open', null), ada).canReply, true);
+  });
+
+  it('assigned ticket: the assignee and admins move it forward; another agent cannot', () => {
+    assert.equal(tickets.ticketPermissions(ticket('open', 'ana'), ana).nextStatus, 'in_progress');
+    assert.equal(tickets.ticketPermissions(ticket('in_progress', 'ana'), ada).nextStatus, 'resolved');
+    const other = tickets.ticketPermissions(ticket('in_progress', 'ben'), ana);
+    assert.equal(other.nextStatus, null);
+    assert.match(other.statusHint, /assigned agent or an admin/);
+    assert.equal(other.canReply, false);
+    assert.equal(tickets.ticketPermissions(ticket('in_progress', 'ana'), ana).canReply, true);
+  });
+
+  it('in progress: can be reassigned but not released', () => {
+    for (const user of [ana, ada]) {
+      const p = tickets.ticketPermissions(ticket('in_progress', 'ana'), user);
+      assert.equal(p.canChangeAssignee, true);
+      assert.equal(p.canUnassign, false);
+      assert.equal(p.canChangePriority, true);
+    }
+  });
+
+  it('resolved: final for status, assignee and priority; replies still allowed for the assignee and admins', () => {
+    for (const user of [ana, ada]) {
+      const p = tickets.ticketPermissions(ticket('resolved', 'ana'), user);
+      assert.deepEqual([p.nextStatus, p.canChangeAssignee, p.canChangePriority, p.canUnassign], [null, false, false, false]);
+      assert.match(p.statusHint, /final/);
+      assert.equal(p.canReply, true);
+    }
+  });
+
+  it('no ticket loaded: nothing is offered', () => {
+    const p = tickets.ticketPermissions(null, ana);
+    assert.deepEqual([p.nextStatus, p.canChangeAssignee, p.canChangePriority, p.canUnassign, p.canReply], [null, false, false, false, false]);
   });
 });
 
@@ -190,6 +297,24 @@ describe('admin API', () => {
   it('getStats sends `from` as an ISO date', async () => {
     await admin.getStats('tok', { from: new Date('2026-10-01T00:00:00Z') });
     assert.equal(calls[0].url, `${BASE}/api/admin/stats?from=2026-10-01T00%3A00%3A00.000Z`);
+  });
+
+  it('getAnalytics sends both bounds as UTC instants, and neither for all time', async () => {
+    await admin.getAnalytics('tok', { from: new Date('2026-10-01T00:00:00Z'), to: new Date('2026-10-31T23:59:59.999Z') });
+    assert.equal(calls[0].url, `${BASE}/api/admin/analytics?from=2026-10-01T00%3A00%3A00.000Z&to=2026-10-31T23%3A59%3A59.999Z`);
+    await admin.getAnalytics('tok', { from: new Date('2026-10-01T00:00:00Z'), to: null });
+    assert.equal(calls[1].url, `${BASE}/api/admin/analytics?from=2026-10-01T00%3A00%3A00.000Z`);
+    await admin.getAnalytics('tok', { from: null, to: null });
+    assert.equal(calls[2].url, `${BASE}/api/admin/analytics`);
+    assert.equal(calls[0].method, 'GET');
+  });
+
+  it('getAnalytics passes on API errors', async () => {
+    respond = () => ({ status: 400, body: { error: { code: 'VALIDATION_ERROR', message: 'to must not be earlier than from' } } });
+    await assert.rejects(() => admin.getAnalytics('tok', {}), (err) => err.code === 'VALIDATION_ERROR');
+    assert.equal(admin.adminErrorMessage({ code: 'VALIDATION_ERROR', message: 'to must not be earlier than from' }), 'to must not be earlier than from');
+    assert.equal(admin.adminErrorMessage({ code: 'FORBIDDEN' }), 'You do not have permission to do this.');
+    assert.equal(admin.adminErrorMessage({ status: 500 }), 'The server had a problem. Please try again in a moment.');
   });
 
   it('user and category mutations hit the contract routes', async () => {

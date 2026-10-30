@@ -1,6 +1,7 @@
 import { Notification } from '../models/Notification.js';
 import { User } from '../models/User.js';
 import { canAccessTicket } from './ticketAccess.js';
+import { STATUS_LABELS } from './ticketConstants.js';
 
 // Creates in-app notifications for ticket activity. Called by the ticket controllers after
 // a change has been saved. Rules:
@@ -11,7 +12,6 @@ import { canAccessTicket } from './ticketAccess.js';
 //     also changes the priority is one notification).
 // Failures are logged and swallowed: a notification problem never undoes the ticket change.
 
-const STATUS_LABELS = { open: 'Open', in_progress: 'In progress', resolved: 'Resolved' };
 const PRIORITY_LABELS = { low: 'Low', medium: 'Medium', high: 'High' };
 
 const idOf = (value) => (value == null ? null : String(value._id ?? value));
@@ -62,6 +62,9 @@ export async function notifyAssignmentChange(before, ticket, actor) {
     const recipients = await eligible(ticket, [ticket.createdBy, ticket.assignedTo], actor._id);
     const priorityText = `Priority is now ${PRIORITY_LABELS[ticket.priority]}.`;
     const entries = [];
+    let newAssigneeName;
+    const nameOfNewAssignee = async () =>
+      (newAssigneeName ??= recipients.get(newAssignee)?.name ?? (await User.findById(newAssignee).select('name'))?.name ?? 'An agent');
 
     for (const [id, user] of recipients) {
       if (assigneeChanged && id === newAssignee) {
@@ -72,7 +75,7 @@ export async function notifyAssignmentChange(before, ticket, actor) {
           message: `${actor.name} assigned ${label(ticket)} to you.${priorityChanged ? ` ${priorityText}` : ''}`,
         });
       } else if (assigneeChanged && newAssignee && user.role === 'customer') {
-        const assigneeName = recipients.get(newAssignee)?.name ?? (await User.findById(newAssignee).select('name'))?.name ?? 'An agent';
+        const assigneeName = await nameOfNewAssignee();
         entries.push({
           recipient: id,
           type: 'ticket_assigned',
@@ -85,6 +88,24 @@ export async function notifyAssignmentChange(before, ticket, actor) {
           type: 'priority_changed',
           title: `${ticket.ticketNumber} priority changed`,
           message: `${actor.name} changed the priority of ${label(ticket)} to ${PRIORITY_LABELS[ticket.priority]}.`,
+        });
+      }
+    }
+
+    // The former assignee, when someone else released or reassigned their ticket (D-10). The
+    // one exception to "only users who can access the ticket": they usually just lost access,
+    // so the notification has no ticket link (see notification.controller), only this notice.
+    const formerAssignee = idOf(before.assignedTo);
+    if (assigneeChanged && formerAssignee && formerAssignee !== String(actor._id)) {
+      const former = await User.findOne({ _id: formerAssignee, isActive: true }).select('_id');
+      if (former) {
+        entries.push({
+          recipient: formerAssignee,
+          type: 'ticket_unassigned',
+          title: `${ticket.ticketNumber} unassigned from you`,
+          message: newAssignee
+            ? `${actor.name} reassigned ${label(ticket)} to ${await nameOfNewAssignee()}.`
+            : `${actor.name} unassigned ${label(ticket)} from you.`,
         });
       }
     }

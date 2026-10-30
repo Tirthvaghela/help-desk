@@ -1,5 +1,6 @@
 // Pure validation of environment variables, kept separate from env.js so it can be tested
 // without exiting the process. Messages never include secret values.
+import { readSlaPolicy } from '../utils/sla.js';
 
 export const REQUIRED_ENV = Object.freeze(['MONGODB_URI', 'JWT_SECRET', 'CLIENT_URL']);
 
@@ -23,9 +24,81 @@ function readNonNegativeInteger(source, name, fallback, errors) {
   return Number(raw);
 }
 
-// Returns { env, errors }. `errors` is empty when the configuration is usable.
+// The database named in a MongoDB connection string, or '' when there is none
+// ("mongodb+srv://user:pass@cluster.example/?retryWrites=true" names none; MongoDB then
+// uses "test"). Works for multi-host and +srv strings, which new URL() cannot parse.
+export function databaseNameOf(uri) {
+  const rest = String(uri ?? '').replace(/^mongodb(\+srv)?:\/\//, '');
+  const afterHosts = rest.slice(rest.lastIndexOf('@') + 1);
+  const slash = afterHosts.indexOf('/');
+  if (slash === -1) return '';
+  const name = afterHosts.slice(slash + 1).split('?')[0];
+  try {
+    return decodeURIComponent(name);
+  } catch {
+    return name;
+  }
+}
+
+// CORS_ORIGINS: optional comma-separated extra frontend origins (exact http(s) origins, no
+// paths or wildcards), e.g. "http://localhost:5174,http://127.0.0.1:5173". CLIENT_URL's origin
+// is always allowed and stays the only base for links in emails.
+function readCorsOrigins(source, clientUrl, errors) {
+  const origins = [];
+  const add = (value, name) => {
+    let url;
+    try {
+      url = new URL(value);
+    } catch {
+      errors.push(`${name} must contain full http(s) origins, e.g. http://localhost:5174 (got "${value}")`);
+      return;
+    }
+    if (!['http:', 'https:'].includes(url.protocol) || (url.pathname !== '/' && url.pathname !== '') || url.search || url.hash || url.username) {
+      errors.push(`${name} must contain origins only (scheme, host and port, no path), got "${value}"`);
+      return;
+    }
+    if (!origins.includes(url.origin)) origins.push(url.origin);
+  };
+  if (clientUrl) {
+    try {
+      origins.push(new URL(clientUrl).origin);
+    } catch {
+      // Reported by the CLIENT_URL check.
+    }
+  }
+  for (const value of String(source.CORS_ORIGINS ?? '').split(',').map((part) => part.trim()).filter(Boolean)) {
+    if (value === '*') {
+      errors.push('CORS_ORIGINS cannot be "*": list each allowed frontend origin');
+      continue;
+    }
+    add(value, 'CORS_ORIGINS');
+  }
+  return origins;
+}
+
+// Startup lines for the log: which database and email transport are in use. Never includes
+// the connection string, credentials or SMTP passwords.
+export function describeConfig(env) {
+  const { email } = env;
+  const transport = {
+    smtp: `smtp via ${email.smtp.host ?? '(no host)'}:${email.smtp.port} — real emails will be sent`,
+    outbox: `outbox → ${email.outboxDir ?? 'backend/.outbox'} (nothing is sent)`,
+    memory: 'memory (tests; nothing is sent)',
+    disabled: 'disabled (no emails; password reset cannot work)',
+  }[email.transport] ?? email.transport;
+  return [
+    `Database: "${env.mongodbDatabase}"${env.mongodbDatabaseExplicit ? '' : ' (MongoDB default; MONGODB_URI names no database)'}`,
+    `Email: ${transport}`,
+    `CORS origins: ${env.corsOrigins.join(', ') || '(none)'}`,
+    `SLA resolution targets: high ${env.sla.high} h, medium ${env.sla.medium} h, low ${env.sla.low} h (calendar hours)`,
+  ];
+}
+
+// Returns { env, errors, warnings }. `errors` is empty when the configuration is usable;
+// `warnings` are printed but do not stop the server.
 export function readEnv(source) {
   const errors = [];
+  const warnings = [];
   const missing = REQUIRED_ENV.filter((key) => !source[key]);
   if (missing.length > 0) {
     errors.push(`Missing environment variables: ${missing.join(', ')}`);
@@ -51,18 +124,35 @@ export function readEnv(source) {
     }
   }
 
+  // Without a database in the URI, MongoDB silently uses "test": easy to confuse with test data
+  // and different from what teammates expect. Refused in production, warned about elsewhere.
+  const mongodbDatabase = source.MONGODB_URI ? databaseNameOf(source.MONGODB_URI) : '';
+  if (source.MONGODB_URI && !mongodbDatabase) {
+    const message = 'MONGODB_URI names no database, so MongoDB uses its default "test". Add the name after the host, e.g. …mongodb.net/helpdesk?retryWrites=true';
+    if (nodeEnv === 'production') errors.push(message);
+    else warnings.push(message);
+  }
+  const corsOrigins = readCorsOrigins(source, clientUrl, errors);
+
   const email = readEmailConfig(source, nodeEnv, errors);
+  // Resolution targets per priority (SLA_HOURS_HIGH / _MEDIUM / _LOW); defaults 24 / 72 / 168.
+  const sla = readSlaPolicy(source);
+  errors.push(...sla.errors);
   const windowMs = readNonNegativeInteger(source, 'AUTH_RATE_LIMIT_WINDOW_MS', DEFAULT_RATE_LIMIT_WINDOW_MS, errors);
   const limitsOff = nodeEnv === 'test';
 
   const env = {
     port: Number(source.PORT) || 4000,
     mongodbUri: source.MONGODB_URI,
+    mongodbDatabase: mongodbDatabase || 'test',
+    mongodbDatabaseExplicit: Boolean(mongodbDatabase),
     jwtSecret,
     // Token lifetime (contract C-3, still open); any value jsonwebtoken accepts, e.g. "1d", "12h".
     jwtExpiresIn: source.JWT_EXPIRES_IN || '1d',
-    // Also the origin used to build links in emails (never the request's Host header).
+    // The origin used to build links in emails (never the request's Host header).
     clientUrl,
+    // Origins allowed by CORS: CLIENT_URL's, then any from CORS_ORIGINS.
+    corsOrigins,
     nodeEnv,
     authRateLimit: {
       max: readNonNegativeInteger(source, 'AUTH_RATE_LIMIT_MAX', limitsOff ? 0 : DEFAULT_RATE_LIMIT_MAX, errors),
@@ -76,8 +166,9 @@ export function readEnv(source) {
     passwordResetTtlMinutes: readPositive(source, 'PASSWORD_RESET_TTL_MINUTES', 30, errors),
     emailChangeTtlHours: readPositive(source, 'EMAIL_CHANGE_TTL_HOURS', 24, errors),
     email,
+    sla: sla.policy,
   };
-  return { env, errors };
+  return { env, errors, warnings };
 }
 
 const DEFAULT_SENSITIVE_RATE_LIMIT_MAX = 5;

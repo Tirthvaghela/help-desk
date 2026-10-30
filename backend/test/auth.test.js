@@ -87,6 +87,33 @@ describe('requireAuth: missing and malformed credentials', () => {
   });
 });
 
+// Regression (QA L3): authenticated JSON had no Cache-Control, so browsers could cache it.
+describe('requireAuth: caching', () => {
+  it('marks rejected requests no-store', async () => {
+    for (const header of [undefined, 'Bearer not-a-jwt']) {
+      const req = request(app).get('/me');
+      const res = await (header ? req.set('Authorization', header) : req);
+      assert.equal(res.status, 401);
+      assert.equal(res.headers['cache-control'], 'no-store');
+    }
+  });
+
+  it('marks successful authenticated responses no-store, on the real app routes too', async (t) => {
+    if (!requireDB(t)) return;
+    const user = await createUser();
+    const res = await request(app).get('/me').set(authHeader(user));
+    assert.equal(res.status, 200);
+    assert.equal(res.headers['cache-control'], 'no-store');
+
+    const { default: realApp } = await import('../src/app.js');
+    for (const path of ['/api/auth/me', '/api/tickets/my', '/api/notifications/unread-count', '/api/categories']) {
+      const real = await request(realApp).get(path).set(authHeader(user));
+      assert.equal(real.status, 200, path);
+      assert.equal(real.headers['cache-control'], 'no-store', path);
+    }
+  });
+});
+
 describe('requireAuth: invalid tokens', () => {
   it('returns 401 for a token signed with another secret', async (t) => {
     if (!requireDB(t)) return;

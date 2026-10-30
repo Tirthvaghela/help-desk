@@ -27,6 +27,14 @@ export function buildTicketCsv(tickets) {
 
 // Start of a report period, or null for all time.
 export function periodStart(period, now = new Date()) {
-  const days = { "Last 7 Days": 7, "Last 30 Days": 30 }[period];
+  const days = { "Last 7 Days": 7, "Last 30 Days": 30, "Last 90 Days": 90 }[period];
   return days ? new Date(now.getTime() - days * 24 * 60 * 60 * 1000) : null;
+}
+
+// The tickets created within { from, to } (Dates or null for no limit), both inclusive.
+export function ticketsInRange(tickets, { from = null, to = null } = {}) {
+  return tickets.filter((ticket) => {
+    const created = new Date(ticket.createdAt);
+    return (!from || created >= from) && (!to || created <= to);
+  });
 }

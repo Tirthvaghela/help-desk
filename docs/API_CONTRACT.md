@@ -1,7 +1,7 @@
-**Yes** |**Yes** |**Yes** |**Yes** |**Yes** |**Yes** |# Help Desk API Contract
+# Help Desk API Contract
 
-> **Status: PROPOSAL (draft v0.5).** Except for `GET /api/health`, **none of the endpoints below are implemented yet.**
-> This document is the agreement the backend and frontend build against. Change it through a pull request so everyone sees the change, and update the **Status** column when an endpoint is merged into `main`.
+> **Status: v0.12. Every endpoint below is implemented.** Points still waiting for a team decision are listed in [Section 1](#1-decisions).
+> This document is the agreement the backend and frontend build against. Change it through a pull request so everyone sees the change.
 
 Source: project brief *Help Desk — Customer Support Ticket System* v0.2 (Sections 2, 4, 5 and 8). Where the brief leaves a choice open, this document says so.
 
@@ -13,11 +13,13 @@ Source: project brief *Help Desk — Customer Support Ticket System* v0.2 (Secti
 4. [Endpoint summary](#4-endpoint-summary)
 5. [Health](#5-health)
 6. [Authentication](#6-authentication)
+   - [6a. Account security](#6a-account-security--implemented-2026-10-29)
 7. [Customer tickets](#7-customer-tickets)
 8. [Agent and admin ticket workflow](#8-agent-and-admin-ticket-workflow)
 9. [Comments (ticket conversation)](#9-comments-ticket-conversation)
 10. [Categories](#10-categories)
 11. [Admin: users and statistics](#11-admin-users-and-statistics)
+   - [12a. Notifications](#12a-notifications--implemented-2026-10-29)
 12. [Error codes](#12-error-codes)
 13. [Change log](#13-change-log)
 
@@ -76,7 +78,7 @@ Option (B), an httpOnly cookie, was not chosen.
 | C-3 | Token lifetime | OPEN | 1 day (`JWT_EXPIRES_IN=1d`). No refresh tokens. The implementation reads `JWT_EXPIRES_IN` (default `1d`), so the value can change without code changes. |
 | C-4 | Is `category` a reference to the Category collection or a fixed list? | **DEFAULT** (D-6) | Reference to a Category collection. |
 | C-5 | Who can be an assignee? | **DEFAULT** (D-2) | Active users with role `agent` or `admin`. |
-| C-6 | Where does the frontend keep the token (e.g. `localStorage`, `sessionStorage`, memory)? | OPEN | No proposal yet. Affects whether a session survives a page reload or a closed tab. |
+| C-6 | Where does the frontend keep the token (e.g. `localStorage`, `sessionStorage`, memory)? | OPEN | `sessionStorage` is what runs today: a session survives a page reload and ends when the tab closes. Not yet confirmed by the team. |
 | C-7 | Logout: does the client just discard the token, or does the server also need a logout/revocation endpoint? | OPEN | Client discards the token; no server endpoint. |
 | C-8 | Under OPEN-1, may an agent assign a ticket to a *different* agent, or only to themselves? | **DEFAULT** (D-1) | Only to themselves (claim) or to nobody (release). Admins assign anyone eligible. |
 
@@ -96,6 +98,8 @@ Option (B), an httpOnly cookie, was not chosen.
 
 | D-8 | Admin modifying self (C-2) | `PATCH /api/admin/users/:id/role` and `/status` on **your own** account → **400 `CANNOT_MODIFY_SELF`**. Admins may change other admins. | The C-2 proposal. Refusing self-changes alone does not keep an admin (two admins can demote each other at the same moment), so a change that would leave no active admin is also refused: **409 `LAST_ACTIVE_ADMIN`**. | Swati |
 | D-9 | Additions made while integrating the dashboards (2026-10-29) | All **additive**; no existing field, route or status changed. **(a)** `PATCH /api/auth/me` updates the caller's own `name` (§6). **(b)** Category has an optional `description` (0–200 chars). **(c)** `GET /api/admin/users` items include `ticketCount`. **(d)** `GET /api/admin/stats` adds `byPriority`, `unresolvedByPriority`, `unassigned`, `byAssignee` and an optional `from` date (§11). **(e)** `POST /api/tickets` also accepts the older field name `category` for `categoryId`, and `priority` defaults to `medium` when omitted. **(f)** `GET /api/tickets/my` also accepts the queue's `priority`, `category` and `q` filters. **(g)** Sign-in and sign-up are rate limited per client IP (`429 RATE_LIMITED`, configurable, see README). | The existing admin screens showed category descriptions, per-user ticket counts, per-priority and per-agent figures and report periods; serving them from the API avoids dozens of list requests. (e) keeps clients written before §7 was aligned working. | Swati, Ayushi |
+| D-10 | Ticket ownership (2026-10-29, QA D-4/D-5) | An **in-progress or resolved ticket always has an assignee**, and a **resolved ticket is final**. `PATCH /status`: a resolved ticket → **400 `TICKET_RESOLVED`**; otherwise the forward-only rule (`INVALID_STATUS_TRANSITION`); then an unassigned ticket → **400 `ASSIGNEE_REQUIRED`** (start or resolve). Only the assignee or an admin can move an assigned ticket (agents cannot reach other agents' tickets, OPEN-1); an admin resolving keeps the assignee, and `statusHistory` records the admin. `PATCH /assign`: a resolved ticket → **400 `TICKET_RESOLVED`** for any `assignedTo` or `priority` change; `assignedTo: null` on an in-progress ticket → **400 `ASSIGNEE_REQUIRED`** (reassign instead). Admins reassign open and in-progress tickets (D-2). These checks run after validation, `INVALID_ID`, 404, 403 and the D-1/D-2 checks, and again inside the atomic update, so a race gives 409 (or the rule's 400), never an ownerless ticket. Existing tickets that break the rule stay readable and are not changed automatically; an admin repairs them by assigning. When someone else releases or reassigns a ticket, the former assignee gets a `ticket_unassigned` notification (§12a). An assignment history is deferred (phase 2). | Stops tickets being worked or resolved with no owner, and orphaned in-progress tickets. Matches the brief's flow: assign, then start work. | Tirth Vaghela; pending review by Ayushi |
+| D-11 | Who may reply (2026-10-29) | `POST /api/tickets/:id/comments`: the **customer who owns** the ticket, the **agent it is assigned to**, and **any admin**. Agents can still **read** unassigned tickets and their comments (OPEN-1) but must claim a ticket before replying → otherwise **403 `FORBIDDEN`** ("Assign this ticket to yourself to reply"). Replies on resolved tickets stay allowed (D-3). | Makes the API match the agent Inbox, which only offers replies on your own tickets; one accountable voice per ticket. | Tirth Vaghela; pending review by Ayushi |
 
 **Router mounting (with D-7):** both ticket routers are mounted at `/api/tickets` in `backend/src/app.js`, **Swati's first**, so that `GET /my` is matched before the agent-workflow router's `GET /:id` (otherwise `my` would be read as an id and return 400 `INVALID_ID`). Admin routes: Swati's `/api/admin/users` and `/api/admin/categories` routers, and the agent-workflow `/api/admin/stats` router, mounted at `/api/admin` with no overlapping paths.
 
@@ -220,8 +224,11 @@ These are the JSON shapes the API returns. They are derived from the brief's pro
 | `assignedTo` | `UserSummary` or `null` |
 | `statusHistory` | Oldest first. The first entry (`open`) is written when the ticket is created. |
 | `resolvedAt` | Set when status becomes `resolved`, otherwise `null` |
+| `dueAt` | **Staff responses only** (agents and admins; v0.11). The SLA due date: the time by which the ticket should be **resolved** (a resolution target, not a response target). `createdAt` + the target for the priority, in calendar hours: high 24 h, medium 72 h, low 168 h by default (`SLA_HOURS_HIGH`, `SLA_HOURS_MEDIUM`, `SLA_HOURS_LOW`, see README). Recalculated from `createdAt` when the priority changes (§8). `null` for tickets created before SLAs existed. Customers never receive this field. |
 
 In **list** responses, tickets omit `description` and `statusHistory` to keep payloads small.
+
+**SLA states** (worked out from `dueAt` when needed; nothing runs in the background, and no reminders are sent): *met* / *missed* — resolved at or before / after `dueAt`; *overdue* — not resolved and `dueAt` has passed; *due soon* — not resolved, 25% or less of the ticket's own target (`dueAt` − `createdAt`) left, up to and including `dueAt`; *due* — more than 25% left; *no SLA* — no `dueAt`.
 
 ### Comment
 
@@ -271,6 +278,7 @@ In **list** responses, tickets omit `description` and `statusHistory` to keep pa
 | PATCH | `/api/admin/users/:id/role` | Admin | Swatismita | **Implemented** |
 | PATCH | `/api/admin/users/:id/status` | Admin | Swatismita | **Implemented** |
 | GET | `/api/admin/stats` | Admin | Ayushi | **Implemented** |
+| GET | `/api/admin/analytics` | Admin | Tirth Vaghela | **Implemented** |
 
 Owners follow the team allocation and can be reassigned by agreement. `GET /api/admin/categories` is an addition to the brief so admins can see inactive categories.
 
@@ -393,11 +401,13 @@ Implemented:
 
 All of these are rate limited per client IP (`SENSITIVE_RATE_LIMIT_MAX`, default 5 per 15 minutes; **429 `RATE_LIMITED`**). One-time links are 32 random bytes, stored only as a SHA-256 hash, single-use, and expire (reset: `PASSWORD_RESET_TTL_MINUTES`, default 30; email change: `EMAIL_CHANGE_TTL_HOURS`, default 24). Tokens are sent in request **bodies**, never in API URLs, and are never returned or logged. Email links are built from `CLIENT_URL`.
 
+A change to the account also ends the links that depended on the old state: a password change or reset cancels open reset links and any pending email change, and a confirmed email change cancels open reset links. Other users' links are not affected.
+
 ### `POST /api/auth/me/password`
 
 Logged in. Request: `{ "currentPassword": "…", "newPassword": "…" }` (new password: same rules as sign-up, and different from the current one).
 
-**200**: `{ "user": { …User }, "token": "…" }`. The token version increases, so **every other session is signed out**; the caller continues with the returned token. Open password-reset links are cancelled. A notice is emailed.
+**200**: `{ "user": { …User }, "token": "…" }`. The token version increases, so **every other session is signed out**; the caller continues with the returned token. Open password-reset links and any pending email change are cancelled. A notice is emailed.
 
 Errors: **400** `VALIDATION_ERROR` · **400 `INVALID_CURRENT_PASSWORD`** (deliberately not 401, so the client keeps its session) · **401** · **429**.
 
@@ -411,7 +421,7 @@ Logged in.
 
 ### `POST /api/auth/verify-email`
 
-Public (the link may be opened on any device). Request: `{ "token": "…" }`. **200** `{ "email": "…" }`; the old address gets a notice. Errors: **400 `INVALID_OR_EXPIRED_TOKEN`** (unknown, expired, already used, or the account is deactivated) · **409** `EMAIL_TAKEN` (registered by someone else meanwhile; the link is used up) · **429**.
+Public (the link may be opened on any device). Request: `{ "token": "…" }`. **200** `{ "email": "…" }`; open password-reset links are cancelled, and the old address gets a notice. A refused change keeps the old email and those links. If the links cannot be cancelled, the change is undone and the answer is **500**. Errors: **400 `INVALID_OR_EXPIRED_TOKEN`** (unknown, expired, already used, or the account is deactivated) · **409** `EMAIL_TAKEN` (registered by someone else meanwhile; the link is used up) · **429**.
 
 ### `POST /api/auth/forgot-password`
 
@@ -422,7 +432,7 @@ Public. Request: `{ "email": "…" }`. **Always 200** with the same `{ "message"
 Public.
 
 - **check** `{ "token": "…" }` → **200** `{ "valid": true, "expiresAt": "…" }` (does not use the link).
-- **reset** `{ "token": "…", "newPassword": "…" }` → **200** `{ "message": "…" }`. The password is validated **before** the link is used. Signs the user out everywhere; **does not sign them in**.
+- **reset** `{ "token": "…", "newPassword": "…" }` → **200** `{ "message": "…" }`. The password is validated **before** the link is used. Signs the user out everywhere and cancels any pending email change; **does not sign them in**. If the links cannot be cancelled, the password is not changed and the answer is **500**; the link used is then spent, so a new one must be requested.
 
 Errors: **400** `VALIDATION_ERROR` (password rules) · **400 `INVALID_OR_EXPIRED_TOKEN`** · **429**.
 
@@ -447,13 +457,24 @@ Request:
 | `categoryId` | Required, must be an existing **active** category. A malformed id → **400 `INVALID_ID`**. The older name `category` is accepted as an alias (D-9). |
 | `priority` | Optional, one of `low`, `medium`, `high`; defaults to `medium` (D-9). An agent may change it later. |
 
-The server sets `ticketNumber`, `status: "open"`, `createdBy` (from the token), `assignedTo: null`, and the first `statusHistory` entry.
+The server sets `ticketNumber`, `status: "open"`, `createdBy` (from the token), `assignedTo: null`, the first `statusHistory` entry, and the SLA due date `dueAt` (§3; stored but not returned to the customer). A replay with the same `Idempotency-Key` returns the stored ticket unchanged; nothing is recalculated.
 
 **201**: `{ "ticket": { …Ticket } }`
 
-Errors: **400** `VALIDATION_ERROR` (missing or non-JSON body, missing subject, bad priority, unknown/inactive category, etc.) · **400** `INVALID_ID` (malformed `categoryId`) · **401** · **403** `FORBIDDEN`.
+Errors: **400** `VALIDATION_ERROR` (missing or non-JSON body, missing subject, bad priority, unknown/inactive category, etc.) · **400** `INVALID_ID` (malformed `categoryId`) · **400** `INVALID_IDEMPOTENCY_KEY` · **401** · **403** `FORBIDDEN` · **409** `IDEMPOTENCY_KEY_REUSED` · **409** `IDEMPOTENCY_KEY_IN_USE`.
 
-Duplicate submissions: the frontend must disable the submit button while the request is in flight, so a double-click creates one ticket.
+**Duplicate submissions (`Idempotency-Key`, v0.9).** The optional request header `Idempotency-Key` makes ticket creation safe to retry. The client generates one key per intended submission (8–128 characters: letters, digits, `-`, `_`; a UUID is fine) and sends the **same key** on every retry of that submission (double click, network error, lost response). Keys are per user.
+
+| Situation | Response |
+| --- | --- |
+| First request with a key | **201** `{ ticket }`; the key now belongs to that ticket |
+| Same key, same content again (also while the first is still running, or at the same time) | **200** with the **same** `{ ticket }` (same `id` and `ticketNumber`) and the header `Idempotent-Replayed: true`. No second ticket, no new notifications |
+| Same key, different content (subject, description, category or priority, after trimming) | **409 `IDEMPOTENCY_KEY_REUSED`**; use a new key for a new ticket |
+| Same key while the first request has not finished after a few seconds | **409 `IDEMPOTENCY_KEY_IN_USE`**; retry shortly with the same key |
+| Malformed key (wrong length or characters, empty) | **400 `INVALID_IDEMPOTENCY_KEY`** |
+| No header | Unchanged: every request creates a ticket |
+
+A request that fails validation, authentication or authorization does not use up its key; the corrected request may reuse it. Different keys always create separate tickets, even with identical content. Concurrent requests with the same key are safe: exactly one creates the ticket (enforced by the database, not by a lookup). The web app sends a key with every submission and also disables the submit button while the request is in flight.
 
 ### `GET /api/tickets/my` — **Implemented**
 
@@ -525,11 +546,11 @@ Request:
 | Field | Rules |
 | --- | --- |
 | `assignedTo` | Optional. User id of an **active** `agent` or `admin` (D-2), or `null` to unassign. **Agents** may only set their own id or `null`; any other id → 403 (D-1). **Admins** may set any eligible user. |
-| `priority` | Optional. `low`, `medium` or `high`. |
+| `priority` | Optional. `low`, `medium` or `high`. A **different** priority also moves `dueAt` to `createdAt` + the new priority's target, in the same update (never from the time of the change). The same priority again, and assignment-only requests, leave `dueAt` unchanged. Tickets without a `dueAt` keep having none. |
 
 **200**: `{ "ticket": { …Ticket } }`
 
-Errors: **400** `VALIDATION_ERROR` (no fields, bad priority, assignee not an active agent/admin) · **400** `INVALID_ID` (ticket id or `assignedTo`) · **401** · **403** (outside the access rule, or an agent assigning someone other than themselves) · **404**.
+Errors: **400** `VALIDATION_ERROR` (no fields, bad priority, assignee not an active agent/admin) · **400** `INVALID_ID` (ticket id or `assignedTo`) · **401** · **403** (outside the access rule, or an agent assigning someone other than themselves) · **404** · **400** `TICKET_RESOLVED` (any change to a resolved ticket, D-10) · **400** `ASSIGNEE_REQUIRED` (`assignedTo: null` on an in-progress ticket: reassign instead, D-10) · **409** (changed meanwhile; since v0.11 this includes another request changing the priority between reading and writing the ticket, so the priority and due date always match).
 
 Fields other than `assignedTo` and `priority` are ignored (Section 2).
 
@@ -552,6 +573,8 @@ Allowed transitions (anything else is rejected):
 
 On success the server appends `{ status, changedBy, changedAt }` to `statusHistory`, and sets `resolvedAt` when the new status is `resolved`.
 
+**Customer email (v0.10).** After a successful change, the ticket's customer gets one email, if their account is active (and they are not the person who made the change). It has an HTML and a plain-text part, and contains the ticket number, the customer's own subject, the previous and new status ("Open", "In progress", "Resolved"), a link to `/tickets/:id` built from `CLIENT_URL`, and why it was sent. It names no agent ("Our support team…") and contains nothing about other users. The email is sent in the background: the response does not wait for it, and a delivery failure is only logged and never undoes the change. The log line has the purpose, the error's code and the numeric SMTP reply code; the address, the link and the server's reply text are not logged. Rejected requests (any error above) send nothing, so a repeated request for the same change cannot send a second email. Assignment, priority changes, replies and ticket creation send no email. Delivery uses `EMAIL_TRANSPORT` (README, "Email").
+
 **200**: `{ "ticket": { …Ticket } }`
 
 Errors:
@@ -559,7 +582,9 @@ Errors:
 | Status | Code | When |
 | --- | --- | --- |
 | 400 | `VALIDATION_ERROR` | `status` missing or not one of the three values |
-| 400 | `INVALID_STATUS_TRANSITION` | e.g. `open → resolved`, `resolved → open`, or same status. Message names both states: "Cannot change status from open to resolved". |
+| 400 | `TICKET_RESOLVED` | The ticket is resolved, so its status can no longer change (D-10) |
+| 400 | `INVALID_STATUS_TRANSITION` | e.g. `open → resolved`, `in_progress → open`, or same status. Message names both states: "Cannot change status from open to resolved". |
+| 400 | `ASSIGNEE_REQUIRED` | The ticket has no assignee: "Assign the ticket before starting work" (or "…before resolving it") (D-10) |
 | 401 / 403 / 404 | | As above |
 
 ---
@@ -596,9 +621,11 @@ Request:
 
 The server sets `author` (from the token), `ticket` and `createdAt`. Posting a comment does **not** change the ticket status. Replies are allowed on resolved tickets (D-3).
 
+Who may post (D-11): the owner, the **assigned** agent, and any admin. Other agents can read the conversation of an unassigned ticket (`GET`) but get **403** ("Assign this ticket to yourself to reply") when posting.
+
 **201**: `{ "comment": { …Comment } }`
 
-Errors: **400** `VALIDATION_ERROR` / `INVALID_ID` · **401** · **403** · **404**.
+Errors: **400** `VALIDATION_ERROR` / `INVALID_ID` · **401** · **403** (outside the access rule, or an agent who is not the assignee) · **404**.
 
 ---
 
@@ -700,6 +727,61 @@ Added for the admin dashboard (D-9), after the fields above:
 
 Query (optional): `from` — an ISO 8601 date (`2026-10-01`, meaning UTC midnight) or date-time with `Z` or an offset (`2026-10-01T00:00:00Z`); every figure then counts only tickets created at or after it. Anything else, including impossible dates such as `2026-02-31`, → **400** `VALIDATION_ERROR`.
 
+### `GET /api/admin/analytics` — **Implemented**
+
+The figures of the Reports page. Read-only. Every figure covers tickets **created** in the range; there is one date basis, `createdAt`. `GET /api/admin/stats` is separate and unchanged.
+
+Query (optional, both inclusive):
+
+| Parameter | Meaning |
+| --- | --- |
+| `from` | ISO 8601 date or date-time with `Z` or an offset. A date alone means the start of that UTC day. |
+| `to` | The same. A date alone means the **end** of that UTC day (`23:59:59.999Z`). |
+
+Neither means all tickets. The range is `from <= createdAt <= to`. The app sends UTC instants: rolling periods (last 7, 30 or 90 days) send `from` only (N × 24 hours before now), and a custom range sends the first and last millisecond of the chosen days in the browser's time zone, so day boundaries follow the viewer and daylight-saving changes.
+
+**400** `VALIDATION_ERROR`, never a wider range than asked for: a blank value, a malformed or impossible date, a repeated parameter, the operator form (`from[$gt]=…`), or `to` earlier than `from`. Other parameters are ignored (§2).
+
+**200**:
+
+```json
+{
+  "filters": { "from": "2026-10-01T00:00:00.000Z", "to": null, "basis": "createdAt" },
+  "asOf": "2026-10-30T12:00:00.000Z",
+  "overview": { "total": 57, "unassigned": 4 },
+  "byStatus": { "open": 12, "in_progress": 20, "resolved": 25, "other": 0 },
+  "byPriority": { "low": 17, "medium": 30, "high": 10, "other": 0 },
+  "byCategory": [{ "category": { "id": "…", "name": "Billing", "isActive": true }, "count": 27 }],
+  "resolutionTime": { "averageMilliseconds": 93600000, "eligibleCount": 24, "excludedCount": 1 },
+  "sla": {
+    "met": 18, "missed": 5, "due": 9, "dueSoon": 3, "overdue": 7, "noSla": 15,
+    "compliancePercent": 78.2, "eligibleResolvedCount": 23
+  },
+  "byAssignee": [{ "assignee": { "id": "…", "name": "Agent Ana" }, "total": 8, "byStatus": { "open": 1, "in_progress": 2, "resolved": 5, "other": 0 } }]
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `filters` | The range used, as UTC instants (`null` for no limit), and the date basis |
+| `asOf` | The one time used for every current SLA state in this response |
+| `overview.total` | Tickets in the range |
+| `overview.unassigned` | Of those, unresolved with no assignee |
+| `byStatus`, `byPriority` | **Current** status and priority of those tickets. A value outside the known ones is counted in `other`, so the totals still add up |
+| `byCategory` | Most tickets first, then by name. Inactive categories are included (`isActive: false`). A deleted or missing category has `name: null` (the app shows "Unknown category"; `id` is `null` when the ticket has no reference). Categories with no tickets are left out |
+| `resolutionTime` | Mean of `resolvedAt − createdAt`, in milliseconds, for resolved tickets. A resolved ticket with a missing or invalid time, or a resolution before its creation, is counted in `excludedCount` instead. `averageMilliseconds` is `null` with no eligible ticket. `updatedAt` is never used |
+| `sla` | The state of each ticket from the one SLA rule (§3) at `asOf`. `met` and `missed` are resolved tickets; `due`, `dueSoon` and `overdue` are unresolved tickets (an overdue ticket is not `missed`); `noSla` has no valid `dueAt`, or is resolved with no valid `resolvedAt`. The six add up to the total |
+| `sla.compliancePercent` | `met / (met + missed) × 100`, rounded **down** to one decimal, so a missed ticket never shows as 100%. `null` when `eligibleResolvedCount` (`met + missed`) is 0 |
+| `byAssignee` | Assigned tickets by assignee, busiest first: id and name only. `name` is `null` for a deleted user or one who is no longer staff |
+
+No customer details, emails, ticket subjects, descriptions, comments or tokens are returned. Resolved is final (D-3, D-10), so no ticket can be reopened. An unresolved record that has a `resolvedAt` is treated by its status: it is not counted as resolved.
+
+Empty range: zeros, empty lists, `null` for the average and compliance.
+
+**Limits.** The counts and the SLA states are two reads with no snapshot across them, so a ticket changing during the request can make them differ by that ticket. Each query has a 15-second limit (**500** if exceeded). A range is selected without an index on `createdAt`, so every request reads the whole collection (measured with 50,000 tickets, see `docs/TEST_EVIDENCE.md`).
+
+Errors: **400** `VALIDATION_ERROR` · **401** · **403**.
+
 ---
 
 ## 12a. Notifications — **Implemented** (2026-10-29)
@@ -712,6 +794,7 @@ In-app notifications, stored per recipient. Every route acts on the **signed-in 
 | --- | --- | --- |
 | `ticket_created` | A customer raises a ticket | Every active agent and admin |
 | `ticket_assigned` | The assignee changes to someone | The new assignee; the customer ("is being handled") |
+| `ticket_unassigned` | Someone else releases or reassigns the ticket (D-10) | The **former** assignee (if active). The one exception to the access rule: they have usually just lost access, so `ticket` is `null` for them. Not sent when you release your own ticket. |
 | `priority_changed` | Only the priority changes | Customer and assignee |
 | `status_changed` / `ticket_resolved` | Status moves forward (`ticket_resolved` when it becomes resolved) | Customer and assignee |
 | `comment_added` | A reply is posted | Customer and assignee |
@@ -737,12 +820,18 @@ Errors: **400** `VALIDATION_ERROR` / `INVALID_ID` · **401** · **404**.
 | `INVALID_JSON` | 400 | Malformed JSON body | **Yes** |
 | `INVALID_ID` | 400 | Path/body id is not a valid ObjectId | **Yes** (Mongoose CastError mapping) |
 | `INVALID_STATUS_TRANSITION` | 400 | Status change not allowed | **Yes** |
+| `ASSIGNEE_REQUIRED` | 400 | Starting or resolving an unassigned ticket, or releasing an in-progress one (D-10) | **Yes** |
+| `TICKET_RESOLVED` | 400 | Status, assignee or priority change on a resolved ticket (D-10) | **Yes** |
 | `CANNOT_MODIFY_SELF` | 400 | Admin changing own role/status | **Yes** |
+| `INVALID_IDEMPOTENCY_KEY` | 400 | Malformed `Idempotency-Key` header on `POST /api/tickets` (§7) | **Yes** |
+| `IDEMPOTENCY_KEY_REUSED` | 409 | `Idempotency-Key` already used for a ticket with different content (§7) | **Yes** |
+| `IDEMPOTENCY_KEY_IN_USE` | 409 | The first request with this `Idempotency-Key` is still being processed (§7) | **Yes** |
 | `UNAUTHORIZED` | 401 | No/invalid/expired token | **Yes** (helper) |
 | `INVALID_CREDENTIALS` | 401 | Wrong email or password | **Yes** |
 | `FORBIDDEN` | 403 | Wrong role, not owner, outside access policy | **Yes** (helper) |
 | `ACCOUNT_DISABLED` | 403 | Deactivated account | **Yes** |
 | `NOT_FOUND` | 404 | Unknown route or resource | **Yes** |
+| `METHOD_NOT_ALLOWED` | 405 | Known path, unsupported method; the `Allow` header lists the supported ones | **Yes** |
 | `CONFLICT` | 409 | Generic duplicate | **Yes** (helper) |
 | `DUPLICATE` | 409 | MongoDB duplicate-key error not handled explicitly | **Yes** (mapping) |
 | `EMAIL_TAKEN` | 409 | Register with existing email | **Yes** |
@@ -770,3 +859,10 @@ Modules should throw the specific code where one is listed (e.g. `ApiError.confl
 | 2026-10-26 | v0.5: §6 auth: password limit is 72 **bytes** (rejected, not shortened); login never reveals unknown or deactivated accounts before the password is verified; missing/non-object bodies give 400. Responses follow §6 (`{ user, token }`, 409 `EMAIL_TAKEN`, 401 `INVALID_CREDENTIALS`); `GET /api/auth/me` implemented. | Tirth Vaghela |
 | 2026-10-29 | v0.6: every endpoint in §4 implemented and tested. §7 customer tickets aligned with this contract (`{ ticket }`, `{ tickets, page, limit, total }`, error envelope, `categoryId`, filters). §10 admin categories and §11 admin users implemented. C-2 → DEFAULT D-8 (`CANNOT_MODIFY_SELF`). D-9 records the additive extensions (profile name update, category description, `ticketCount`, extra stats and `from`, `category` alias and default priority, `/my` filters, sign-in rate limiting with `429 RATE_LIMITED`). C-3, C-6, C-7 stay OPEN. Pending review by Swati and Ayushi. | Tirth Vaghela |
 | 2026-10-29 | v0.7: §6a account security (password change, email change with confirmation, forgot/reset password) and §12a in-app notifications. Tokens carry a version (`ver`) so a password change or reset signs the user out everywhere (partly answers C-7). New error codes `INVALID_CURRENT_PASSWORD`, `INVALID_OR_EXPIRED_TOKEN`, `EMAIL_DELIVERY_FAILED`. Review fixes: §11 `409 LAST_ACTIVE_ADMIN` (D-8 no longer relies on self-protection alone); stats `from` accepts ISO 8601 only. | Tirth Vaghela |
+| 2026-10-29 | v0.8: D-10 ticket ownership (in-progress and resolved tickets always have an assignee; resolved is final; `ASSIGNEE_REQUIRED`, `TICKET_RESOLVED`; `ticket_unassigned` notification). D-11 replies: agents only on tickets assigned to them. | Tirth Vaghela |
+| 2026-10-29 | v0.9: duplicate ticket submissions (§7): optional `Idempotency-Key` header on `POST /api/tickets`; a repeat returns the original ticket (200, `Idempotent-Replayed: true`). New error codes `INVALID_IDEMPOTENCY_KEY`, `IDEMPOTENCY_KEY_REUSED`, `IDEMPOTENCY_KEY_IN_USE`. Backward compatible: requests without the header behave as before. | Tirth Vaghela |
+| 2026-10-30 | v0.10: §8 `PATCH /api/tickets/:id/status` emails the ticket's active customer after a successful change (background delivery, failures logged only, no email for rejected requests or other ticket changes). No request or response changes. | Tirth Vaghela |
+| 2026-10-30 | v0.11: SLA due dates. Ticket `dueAt` (staff responses only) = `createdAt` + resolution target for the priority (defaults 24 / 72 / 168 calendar hours, `SLA_HOURS_*`); set on creation, recalculated from `createdAt` when the priority changes; `null` for older tickets. `PATCH …/assign` returns 409 if the priority changed meanwhile. SLA states defined in §3. Additive: no field removed or renamed. | Tirth Vaghela |
+| 2026-10-30 | v0.12: `GET /api/admin/analytics` (§11), the figures of the Reports page: status, priority, category, resolution time, SLA and assignee figures for tickets created in an inclusive `from`..`to` range. Additive: `GET /api/admin/stats` is unchanged. | Tirth Vaghela |
+| 2026-10-30 | Documentation only, no API change: removed stray text from the title, replaced the out-of-date "proposal" status, listed §6a and §12a in the contents, recorded that `sessionStorage` is what runs for C-6, and corrected what a failed email logs. | Tirth Vaghela |
+| 2026-10-30 | Behaviour only, no request or response field changed: §6a links are cancelled after a password or email change (500 if that fails), and §8 failed emails log only the purpose and error codes. | Tirth Vaghela |

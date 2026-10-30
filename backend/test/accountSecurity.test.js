@@ -291,3 +291,112 @@ describe('Forgot and reset password', () => {
     assert.ok(!logged.some((line) => /token=|cara@example\.test/.test(line)), 'no link or address in logs');
   });
 });
+
+// A password change must evict anyone relying on an old email-change link, and an email change
+// must end reset links that went to the old address.
+describe('Links after a password or email change', () => {
+  const NEW_PASSWORD = 'after-change-pass-7';
+  const reset = (token, newPassword = NEW_PASSWORD) => request(app).post('/api/auth/reset-password').send({ token, newPassword });
+  const verify = (token) => request(app).post('/api/auth/verify-email').send({ token });
+
+  async function requestEmailChange(address, newEmail) {
+    const session = await tokenFor(address);
+    const res = await as(session, 'post', '/api/auth/me/email').send({ newEmail, currentPassword: PASSWORD });
+    assert.equal(res.status, 202, JSON.stringify(res.body));
+    return linkToken((await waitForMail(newEmail))[0]);
+  }
+
+  // The link in the newest reset email to this address. Other emails (notices) may arrive too.
+  async function requestResetLink(address) {
+    const isReset = (mail) => mail.text.includes('/reset-password?token=');
+    const res = await request(app).post('/api/auth/forgot-password').send({ email: address });
+    assert.equal(res.status, 200);
+    for (let i = 0; i < 50 && !mailTo(address).some(isReset); i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    return linkToken(mailTo(address).filter(isReset).at(-1));
+  }
+
+  it('a password reset voids a pending email change; another user\'s link keeps working', async (t) => {
+    if (!requireDB(t)) return;
+    const caraLink = await requestEmailChange('cara@example.test', 'cara.pending@example.test');
+    const devLink = await requestEmailChange('dev@example.test', 'dev.pending@example.test');
+
+    assert.equal((await reset(await requestResetLink('cara@example.test'))).status, 200);
+
+    assertError(await verify(caraLink), 400, 'INVALID_OR_EXPIRED_TOKEN');
+    assert.equal((await User.findById(cara._id)).email, 'cara@example.test');
+    assert.equal(await AuthToken.countDocuments({ user: cara._id, purpose: 'email_change' }), 0);
+
+    assert.equal((await verify(devLink)).status, 200, 'the other user is unaffected');
+    assert.equal((await User.findById(dev._id)).email, 'dev.pending@example.test');
+  });
+
+  it('a signed-in password change voids a pending email change too', async (t) => {
+    if (!requireDB(t)) return;
+    const link = await requestEmailChange('cara@example.test', 'cara.pending@example.test');
+    const session = await tokenFor('cara@example.test');
+
+    const res = await as(session, 'post', '/api/auth/me/password').send({ currentPassword: PASSWORD, newPassword: NEW_PASSWORD });
+    assert.equal(res.status, 200);
+
+    assertError(await verify(link), 400, 'INVALID_OR_EXPIRED_TOKEN');
+    assert.equal((await User.findById(cara._id)).email, 'cara@example.test');
+    assert.equal((await as(res.body.token, 'get', '/api/auth/me/email')).body.pendingEmail, null);
+  });
+
+  it('if the links cannot be voided, the password stays as it was', async (t) => {
+    if (!requireDB(t)) return;
+    const link = await requestResetLink('cara@example.test');
+    t.mock.method(AuthToken, 'deleteMany', async () => { throw new Error('write failed'); });
+
+    assertError(await reset(link), 500, 'INTERNAL_ERROR');
+
+    t.mock.restoreAll();
+    assert.equal((await loginAs('cara@example.test')).status, 200, 'the old password still works');
+    assert.equal((await loginAs('cara@example.test', NEW_PASSWORD)).status, 401);
+  });
+
+  it('a confirmed email change voids reset links; another user\'s link keeps working', async (t) => {
+    if (!requireDB(t)) return;
+    const oldLink = await requestResetLink('cara@example.test');
+    const devLink = await requestResetLink('dev@example.test');
+    const changeLink = await requestEmailChange('cara@example.test', 'cara.moved@example.test');
+
+    assert.equal((await verify(changeLink)).status, 200);
+
+    assertError(await reset(oldLink), 400, 'INVALID_OR_EXPIRED_TOKEN');
+    assert.equal((await loginAs('cara.moved@example.test')).status, 200, 'the password did not change');
+
+    assert.equal((await reset(devLink)).status, 200, 'the other user is unaffected');
+    assert.equal((await loginAs('dev@example.test', NEW_PASSWORD)).status, 200);
+
+    const newLink = await requestResetLink('cara.moved@example.test');
+    assert.equal((await reset(newLink)).status, 200, 'a new link to the new address works');
+  });
+
+  it('a refused email change keeps the old email and the reset link', async (t) => {
+    if (!requireDB(t)) return;
+    const resetLink = await requestResetLink('cara@example.test');
+    const changeLink = await requestEmailChange('cara@example.test', 'taken@example.test');
+    await User.create({ name: 'Late Comer', email: 'taken@example.test', role: 'customer', passwordHash: 'x'.repeat(20) });
+
+    assertError(await verify(changeLink), 409, 'EMAIL_TAKEN');
+
+    assert.equal((await User.findById(cara._id)).email, 'cara@example.test');
+    assert.equal((await reset(resetLink)).status, 200, 'the reset link still works');
+  });
+
+  it('if the reset links cannot be voided, the email change is undone', async (t) => {
+    if (!requireDB(t)) return;
+    const resetLink = await requestResetLink('cara@example.test');
+    const changeLink = await requestEmailChange('cara@example.test', 'cara.moved@example.test');
+    t.mock.method(AuthToken, 'deleteMany', async () => { throw new Error('write failed'); });
+
+    assertError(await verify(changeLink), 500, 'INTERNAL_ERROR');
+
+    t.mock.restoreAll();
+    assert.equal((await User.findById(cara._id)).email, 'cara@example.test');
+    assert.equal((await reset(resetLink)).status, 200, 'the account is as it was, so its reset link still works');
+  });
+});

@@ -6,10 +6,11 @@
   "type": "module",
   "main": "src/server.js",
   "scripts": {
-    "dev": "node --watch src/server.js",
+    "dev": "node --watch-path=src src/server.js",
     "start": "node src/server.js",
     "test": "node --import ./test/setup.js --test --test-concurrency=1 test/*.test.js",
     "seed:categories": "node scripts/seed-categories.js",
+    "seed:demo": "node scripts/seed-demo.js",
     "check:categories": "node scripts/check-categories.js",
     "create:staff": "node scripts/create-staff.js"
   },

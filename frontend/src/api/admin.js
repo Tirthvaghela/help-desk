@@ -10,6 +10,12 @@ export function getStats(token, { from } = {}) {
   return apiRequest(`/api/admin/stats${queryString({ from: iso })}`, { token });
 }
 
+// The Reports figures (contract §11), for tickets created from `from` to `to` (Dates, or null for
+// no limit), both inclusive. Always sent as UTC instants.
+export function getAnalytics(token, { from, to } = {}) {
+  return apiRequest(`/api/admin/analytics${queryString({ from: from?.toISOString(), to: to?.toISOString() })}`, { token });
+}
+
 // { users, page, limit, total }; filters: role, isActive ("true"/"false"), q, page, limit.
 export function listUsers(token, params = {}) {
   return apiRequest(`/api/admin/users${queryString(params)}`, { token });

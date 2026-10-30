@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "../../auth/useAuth.js";
 import { useApiData } from "../../api/useApiData.js";
-import { assignTicket, getTicket, listQueue, nextStatus, ticketErrorMessage, updateTicketStatus } from "../../api/tickets.js";
-import { getStats, listAssignableStaff } from "../../api/admin.js";
+import { assignTicket, getTicket, listQueue, ticketErrorMessage, ticketPermissions, updateTicketStatus } from "../../api/tickets.js";
+import { getStats, listAllCategories, listAssignableStaff } from "../../api/admin.js";
 import { capitalize, formatIsoDate, STATUS_LABELS } from "../staff/staffFormat.js";
 import { useDebouncedValue } from "../staff/useDebouncedValue.js";
+import StatusHistory from "../staff/StatusHistory.jsx";
+import SlaBadge from "../staff/SlaBadge.jsx";
+import { slaDeadline } from "../staff/slaFormat.js";
+import { adminAssigneeParam, categoryParam, filterKey, pagingFor } from "../staff/queueFilters.js";
 
 const PAGE_SIZE = 20;
 
@@ -98,7 +102,7 @@ function Badge({ value, type }) {
 // ========================================
 
 function TicketModal({ ticketId, staff, onClose, onChanged }) {
-  const { token, endSessionIfRejected } = useAuth();
+  const { token, user, endSessionIfRejected } = useAuth();
   const loadTicket = useCallback((authToken) => getTicket(authToken, ticketId), [ticketId]);
   const { data: ticket, status, error, reload, setData } = useApiData(loadTicket);
   const [busy, setBusy] = useState(null);
@@ -128,7 +132,9 @@ function TicketModal({ ticketId, staff, onClose, onChanged }) {
     }
   }
 
-  const allowedNext = ticket ? nextStatus(ticket.status) : null;
+  // D-10: status only once assigned; no release while in progress; resolved is final.
+  const permissions = ticketPermissions(ticket, user);
+  const allowedNext = permissions.nextStatus;
 
   return (
     <div
@@ -225,6 +231,26 @@ function TicketModal({ ticketId, staff, onClose, onChanged }) {
                   />
                 </div>
               </div>
+
+              <div>
+                <p className="text-xs text-slate-500">
+                  SLA
+                </p>
+
+                <div className="mt-1">
+                  <SlaBadge ticket={ticket} />
+                </div>
+              </div>
+
+              <div>
+                <p className="text-xs text-slate-500">
+                  Due
+                </p>
+
+                <p className="mt-1 text-sm font-medium text-slate-700">
+                  {slaDeadline(ticket) ?? "—"}
+                </p>
+              </div>
             </div>
 
             {/* DESCRIPTION */}
@@ -253,10 +279,11 @@ function TicketModal({ ticketId, staff, onClose, onChanged }) {
                   onChange={(event) =>
                     save("assign", () => assignTicket(token, ticket.id, { assignedTo: event.target.value || null }))
                   }
-                  disabled={Boolean(busy) || !staff}
+                  disabled={Boolean(busy) || !staff || !permissions.canChangeAssignee}
                   style={inputStyle}
                 >
-                  <option value="">Unassigned</option>
+                  {/* An in-progress ticket must be reassigned, not released (D-10). */}
+                  <option value="" disabled={!permissions.canUnassign && Boolean(ticket.assignedTo)}>Unassigned</option>
                   {/* Keep the current assignee listed even if they are no longer active. */}
                   {ticket.assignedTo && !staff?.some((member) => member.id === ticket.assignedTo.id) && (
                     <option value={ticket.assignedTo.id}>{ticket.assignedTo.name}</option>
@@ -294,11 +321,17 @@ function TicketModal({ ticketId, staff, onClose, onChanged }) {
               </div>
             </div>
 
+            {permissions.statusHint && (
+              <p className="mt-3 text-xs text-slate-500">{permissions.statusHint}</p>
+            )}
+
             {actionError && (
               <p role="alert" className="mt-4 rounded-xl bg-red-50 px-4 py-3 text-xs text-red-700">
                 {actionError}
               </p>
             )}
+
+            <StatusHistory ticket={ticket} defaultOpen className="mt-6 rounded-2xl bg-white/70 p-4" />
           </>
         )}
 
@@ -327,23 +360,36 @@ export default function AdminTickets({ initialTicketId = null }) {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [priorityFilter, setPriorityFilter] = useState("all");
-  const [page, setPage] = useState(1);
+  const [categoryFilter, setCategoryFilter] = useState("all");
+  const [assigneeFilter, setAssigneeFilter] = useState("all");
   const [selectedTicketId, setSelectedTicketId] = useState(initialTicketId);
 
-  const query = useDebouncedValue(search.trim(), 300);
-  useEffect(() => {
-    setPage(1);
-  }, [query, statusFilter, priorityFilter]);
-
-  const loadTickets = useCallback(
-    (token) => listQueue(token, { q: query, status: statusFilter, priority: priorityFilter, page, limit: PAGE_SIZE }),
-    [query, statusFilter, priorityFilter, page],
-  );
-  const list = useApiData(loadTickets);
   const loadStats = useCallback((token) => getStats(token), []);
   const stats = useApiData(loadStats);
   const loadStaff = useCallback((token) => listAssignableStaff(token), []);
   const staff = useApiData(loadStaff);
+  // Deactivated categories too: their tickets still exist and still filter (D-6).
+  const loadCategories = useCallback((token) => listAllCategories(token), []);
+  const categories = useApiData(loadCategories);
+
+  const query = useDebouncedValue(search.trim(), 300);
+  const category = categoryParam(categoryFilter, categories.data);
+  const assignee = adminAssigneeParam(assigneeFilter, staff.data);
+
+  // Back to the first page whenever the filters change.
+  const filtersKey = filterKey({ q: query, status: statusFilter, priority: priorityFilter, category, assignee });
+  const [storedPaging, setPaging] = useState({ key: filtersKey, page: 1 });
+  const paging = pagingFor(storedPaging, filtersKey);
+  if (paging !== storedPaging) setPaging(paging);
+  const page = paging.page;
+  const goToPage = (next) => setPaging({ key: filtersKey, page: next });
+
+  const loadTickets = useCallback(
+    (token) =>
+      listQueue(token, { q: query, status: statusFilter, priority: priorityFilter, category, assignee, page, limit: PAGE_SIZE }),
+    [query, statusFilter, priorityFilter, category, assignee, page],
+  );
+  const list = useApiData(loadTickets);
 
   const tickets = list.data?.tickets ?? [];
   const totalPages = list.data ? Math.max(1, Math.ceil(list.data.total / PAGE_SIZE)) : 1;
@@ -395,8 +441,8 @@ export default function AdminTickets({ initialTicketId = null }) {
           padding: "20px",
         }}
       >
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-          <div>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
+          <div className="sm:col-span-2 xl:col-span-1">
             <label htmlFor="admin-ticket-search" className="mb-2 block text-xs font-medium text-slate-600">
               Search Tickets
             </label>
@@ -451,6 +497,57 @@ export default function AdminTickets({ initialTicketId = null }) {
               <option value="low">Low</option>
             </select>
           </div>
+
+          <div>
+            <label htmlFor="admin-ticket-category-filter" className="mb-2 block text-xs font-medium text-slate-600">
+              Category
+            </label>
+
+            <select
+              id="admin-ticket-category-filter"
+              value={categoryFilter}
+              onChange={(event) =>
+                setCategoryFilter(event.target.value)
+              }
+              disabled={categories.status !== "ready"}
+              style={inputStyle}
+            >
+              <option value="all">
+                {categories.status === "error" ? "Categories unavailable" : "All Categories"}
+              </option>
+              {categories.data?.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.isActive ? option.name : `${option.name} (inactive)`}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label htmlFor="admin-ticket-assignee-filter" className="mb-2 block text-xs font-medium text-slate-600">
+              Assignee
+            </label>
+
+            <select
+              id="admin-ticket-assignee-filter"
+              value={assigneeFilter}
+              onChange={(event) =>
+                setAssigneeFilter(event.target.value)
+              }
+              style={inputStyle}
+            >
+              <option value="all">All Assignees</option>
+              <option value="unassigned">Unassigned</option>
+              {staff.status === "error" && (
+                <option value="" disabled>Staff list unavailable</option>
+              )}
+              {staff.data?.map((member) => (
+                <option key={member.id} value={member.id}>
+                  {member.role === "admin" ? `${member.name} (admin)` : member.name}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
       </div>
 
@@ -496,7 +593,7 @@ export default function AdminTickets({ initialTicketId = null }) {
                   "Customer",
                   "Category",
                   "Priority",
-                  "Status",
+                  "Status / SLA",
                   "Assigned Agent",
                   "Action",
                 ].map((heading) => (
@@ -555,13 +652,17 @@ export default function AdminTickets({ initialTicketId = null }) {
                     />
                   </td>
 
-                  {/* STATUS */}
+                  {/* STATUS AND SLA */}
 
                   <td className="px-5 py-5">
-                    <Badge
-                      value={STATUS_LABELS[ticket.status]}
-                      type="status"
-                    />
+                    <div className="flex flex-col items-start gap-1.5">
+                      <Badge
+                        value={STATUS_LABELS[ticket.status]}
+                        type="status"
+                      />
+
+                      <SlaBadge ticket={ticket} />
+                    </div>
                   </td>
 
                   {/* ASSIGNEE */}
@@ -594,7 +695,7 @@ export default function AdminTickets({ initialTicketId = null }) {
                     colSpan={7}
                     className="px-5 py-12 text-center text-sm text-slate-500"
                   >
-                    {query || statusFilter !== "all" || priorityFilter !== "all"
+                    {query || statusFilter !== "all" || priorityFilter !== "all" || category || assignee
                       ? "No tickets match your search or filters."
                       : "No tickets yet."}
                   </td>
@@ -616,7 +717,7 @@ export default function AdminTickets({ initialTicketId = null }) {
           <div className="flex items-center justify-between gap-3 border-t border-white/70 px-5 py-4 text-xs text-slate-600">
             <button
               type="button"
-              onClick={() => setPage((current) => current - 1)}
+              onClick={() => goToPage(page - 1)}
               disabled={page <= 1}
               className="rounded-xl border border-slate-200 bg-white/80 px-4 py-2 font-medium hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
             >
@@ -625,7 +726,7 @@ export default function AdminTickets({ initialTicketId = null }) {
             <span>Page {page} of {totalPages}</span>
             <button
               type="button"
-              onClick={() => setPage((current) => current + 1)}
+              onClick={() => goToPage(page + 1)}
               disabled={page >= totalPages}
               className="rounded-xl border border-slate-200 bg-white/80 px-4 py-2 font-medium hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
             >

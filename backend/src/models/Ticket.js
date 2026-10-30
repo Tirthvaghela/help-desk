@@ -53,6 +53,9 @@ const ticketSchema = new mongoose.Schema(
     // null means unassigned; part of the agent access rule (contract OPEN-1).
     assignedTo: { type: ObjectId, ref: 'User', default: null },
     resolvedAt: { type: Date, default: null },
+    // Resolution target (utils/sla.js): createdAt + the SLA hours for the priority, recalculated
+    // from createdAt when the priority changes. null on tickets created before SLAs existed.
+    dueAt: { type: Date, default: null },
   },
   { timestamps: true },
 );
@@ -67,6 +70,9 @@ ticketSchema.pre('validate', function addInitialStatus() {
 ticketSchema.index({ createdBy: 1, createdAt: -1 });
 ticketSchema.index({ assignedTo: 1, status: 1, createdAt: -1 });
 ticketSchema.index({ status: 1, category: 1 });
+// Currently unused: no query filters by due date (SLA figures select tickets by createdAt and
+// work out each state in code). Kept until a separate change decides otherwise.
+ticketSchema.index({ status: 1, dueAt: 1 });
 applyToJSON(ticketSchema);
 
 export const Ticket = mongoose.model('Ticket', ticketSchema);
