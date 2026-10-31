@@ -1,4 +1,4 @@
-import { useCallback, useId, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 import { useAuth } from "../../auth/useAuth.js";
 import { useApiData } from "../../api/useApiData.js";
 import { accountErrorMessage, cancelEmailChange, getPendingEmailChange, requestEmailChange } from "../../api/account.js";
@@ -42,6 +42,8 @@ function EmailSection() {
   const { user, token, endSessionIfRejected } = useAuth();
   const ids = useId();
   const loadPending = useCallback((authToken) => getPendingEmailChange(authToken), []);
+  // Also reloads after a password change: that cancels a pending change and issues a new token,
+  // and useApiData loads again for a new token.
   const pending = useApiData(loadPending);
 
   const [values, setValues] = useState({ newEmail: "", currentPassword: "" });
@@ -49,7 +51,15 @@ function EmailSection() {
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
 
-  const pendingEmail = pending.data?.pendingEmail;
+  // useApiData drops its data when a load fails, which must not read as "nothing is pending".
+  const [lastKnown, setLastKnown] = useState(null);
+  useEffect(() => {
+    if (pending.data) setLastKnown(pending.data);
+  }, [pending.data]);
+
+  const current = pending.data ?? lastKnown;
+  const pendingEmail = current?.pendingEmail;
+  const loadFailed = pending.status === "error" && !pending.data;
 
   async function run(action) {
     if (busy) return;
@@ -93,11 +103,21 @@ function EmailSection() {
         <div role="status" className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-[#fff6e6] px-4 py-3 text-[12px] text-[#7a5418]">
           <span>
             Waiting for confirmation of <strong className="break-all">{pendingEmail}</strong>. Open the link we sent there
-            {pending.data?.expiresAt ? ` before ${formatDateTime(pending.data.expiresAt)}` : ""}.
+            {current?.expiresAt ? ` before ${formatDateTime(current.expiresAt)}` : ""}.
           </span>
           <button type="button" onClick={handleCancel} disabled={busy} className="font-semibold underline disabled:opacity-60">
             Cancel change
           </button>
+        </div>
+      )}
+
+      {loadFailed && (
+        <div className="mt-4">
+          <ErrorAlert onRetry={pending.reload}>
+            {pendingEmail
+              ? "We could not refresh your email change status, so the request shown above may be out of date."
+              : "We could not check whether an email change is waiting for confirmation."}
+          </ErrorAlert>
         </div>
       )}
 
