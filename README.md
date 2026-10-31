@@ -31,15 +31,44 @@ Ticket lifecycle: **Open → In Progress → Resolved**, with a timestamped repl
 
 ## Team
 
-| Area | Member | Responsibilities |
-| --- | --- | --- |
-| Backend | Tirth Vaghela | Backend integration, API contract coordination, testing, DevOps/deployment, README and documentation |
-| Backend | Ayushi Rathi | Agent workflow, ticket queue, filters, assignment, status transitions, comments/conversations, admin ticket summary |
-| Backend | Swati Parija\* | Authentication, JWT and role middleware, User/Ticket/Category models, ticket creation, customer ticket history, ownership/access checks |
-| Frontend | Mimansa Narendra Patle | Customer signup/login, customer dashboard, ticket creation, ticket history, ticket details, loading/error/empty states |
-| Frontend | Shwetaleena Kundu | Agent dashboard, ticket filtering, replies, assignment/status updates, admin user/category screens |
+### Backend Team (3 Members)
 
-\* Spelling of this name is still to be confirmed with the team member.
+**Tirth Vaghela — Backend Integration, Admin Backend & DevOps**
+
+- Backend architecture and API integration
+- Admin backend APIs, dashboard data and management operations
+- Shared database and API coordination
+- Complete backend-to-frontend API integration across customer, agent and admin modules
+- Integration testing, deployment coordination and README/documentation
+
+**Ayushi Rathi — Agent Workflow & Conversations**
+
+- Agent ticket queue, search and filters
+- Ticket assignment and status transitions
+- Replies and conversation management
+- Ticket status history and admin ticket summaries
+
+**Swatismita — Tickets & Authentication**
+
+- User authentication, JWT and role-based middleware
+- User, Ticket and Category models
+- Ticket creation and customer ticket history
+- Ticket ownership and access checks
+
+### Frontend Team (2 Members)
+
+**Mimansa Narendra Patle — Customer Frontend & Landing Page**
+
+- Project landing page development
+- Signup, login and customer dashboard
+- Create-ticket form, ticket history and ticket details
+- Loading, validation and error states
+
+**Shwetaleena Kundu — Agent/Admin Frontend**
+
+- Agent dashboard, filters and replies
+- Ticket assignment and status updates
+- Admin user and category management screens
 
 ## Implementation status
 
@@ -53,6 +82,8 @@ Ticket lifecycle: **Open → In Progress → Resolved**, with a timestamped repl
 | Agent queue, filters, search, claim/release, priority, status changes | ✅ Implemented |
 | Ticket replies (comments) and status history | ✅ Implemented |
 | Admin statistics, ticket oversight and reassignment | ✅ Implemented |
+| Admin ticket conversation: read and reply in the ticket dialog | ✅ Implemented |
+| Admin priority control: change priority in the ticket dialog, locked once a ticket is resolved | ✅ Implemented |
 | Admin category management and user management (role, activation) | ✅ Implemented |
 | Landing page, customer portal, agent dashboard, admin dashboard | ✅ Implemented, connected to the API |
 | Customer profile: change own name | ✅ Implemented |
@@ -65,7 +96,7 @@ Ticket lifecycle: **Open → In Progress → Resolved**, with a timestamped repl
 | Duplicate ticket submissions (a retried or double-clicked submission returns the original ticket) | ✅ Implemented (`Idempotency-Key`, contract §7) |
 | Demo data for presentations (local databases only) | ✅ Implemented (`npm run seed:demo`, see [Demo data](#demo-data-optional-local-only)) |
 | User flows, wireframes, test evidence | 📝 [docs/USER_FLOWS.md](docs/USER_FLOWS.md), [docs/WIREFRAMES.md](docs/WIREFRAMES.md), [docs/TEST_EVIDENCE.md](docs/TEST_EVIDENCE.md) |
-| Backend tests (`node:test` + Supertest) and frontend unit tests (`node:test`) | ✅ Implemented |
+| Backend tests (`node:test` + Supertest); frontend unit tests and real React DOM tests (`node:test`, jsdom, Testing Library) | ✅ Implemented. Browser, visual and end-to-end tests are not implemented |
 | API contract | 📝 [docs/API_CONTRACT.md](docs/API_CONTRACT.md); a few points are still open (see below) |
 | Deployment | ⏳ Not deployed yet: host and production database still to be chosen (see [Deployment readiness](#deployment-readiness)) |
 
@@ -76,7 +107,7 @@ Ticket lifecycle: **Open → In Progress → Resolved**, with a timestamped repl
 | Frontend | React 19, Vite, React Router, Tailwind CSS |
 | Backend | Node.js, Express 5, Mongoose |
 | Database | MongoDB |
-| Testing | Node's built-in test runner (`node:test`), Supertest |
+| Testing | Node's built-in test runner (`node:test`); Supertest (backend); jsdom and Testing Library (frontend) |
 | DevOps | Git/GitHub; deployment target to be confirmed (Render or equivalent) |
 
 ## Project structure
@@ -104,11 +135,11 @@ help-desk/
 │   ├── src/
 │   │   ├── api/           client.js (fetch wrapper), tickets.js, admin.js, useApiData.js
 │   │   ├── auth/          AuthProvider, session storage, StaffRoute / CustomerRoute guards
-│   │   ├── components/    landing/, customer/, agent/, admin/, staff/ (shared helpers), common/
-│   │   ├── pages/         HomePage (landing), customer/, agent/, admin/, StaffLogin, NotFoundPage
+│   │   ├── components/    landing/, customer/, agent/, admin/, account/, staff/ (shared helpers), common/
+│   │   ├── pages/         HomePage (landing), customer/, agent/, admin/, account/, StaffLogin, StaffAccount, NotFoundPage
 │   │   ├── App.jsx        Routes
 │   │   └── main.jsx       Entry point
-│   ├── test/              node:test unit tests for the API layer and pure logic; SlaBadge and AnalyticsPanels are rendered to HTML
+│   ├── test/              node:test unit tests, and real React DOM tests (jsdom, Testing Library; *.render.test.js, accountSecurity.test.js); helpers/
 │   ├── .env.example
 │   └── package.json
 ├── .github/workflows/ci.yml   GitHub Actions: backend tests, frontend tests + build
@@ -118,6 +149,8 @@ help-desk/
     ├── USER_FLOWS.md              Customer, agent and admin flows; ticket lifecycle (diagrams)
     ├── WIREFRAMES.md              Low-fidelity layouts of every screen
     ├── TEST_EVIDENCE.md           What was tested, how, and the results
+    ├── DECISION_REGISTER.md       Product and policy questions the team still has to settle
+    ├── FRONTEND_RENDER_TEST_PLAN.md  Frontend render coverage, remaining gaps and proposed tests
     └── CUSTOMER_TICKET_API_GAPS.md  History of the customer ticket API alignment
 ```
 
@@ -333,7 +366,7 @@ The counts and the SLA figures are two separate reads, so a ticket changing duri
 | backend | `npm run create:staff` | Create an agent or admin account from `STAFF_*` variables |
 | backend | `npm run check:categories` | Read-only: list category names that differ only in case (they block the unique name index) |
 | frontend | `npm run dev` | Start the Vite dev server on port 5173 (`--strictPort`: fails if the port is taken instead of moving to another) |
-| frontend | `npm test` | Run frontend unit tests |
+| frontend | `npm test` | Run frontend unit and real React DOM tests |
 | frontend | `npm run build` | Production build into `frontend/dist/` |
 | frontend | `npm run preview` | Serve the production build locally |
 
@@ -376,7 +409,11 @@ Most tests do not need MongoDB. Tests that do need it are **skipped** (shown as 
 - For database tests, call `connectTestDB()` in `before`, `clearTestDB()` in `beforeEach`, and `disconnectTestDB()` in `after`. See `test/health.test.js` for the pattern.
 - Test files run one at a time, so they never clear each other's data.
 
-**Frontend:** `cd frontend && npm test` runs unit tests with Node's built-in runner (no extra dependencies): the API layer against a fake `fetch` (methods, URLs, bodies, error handling), form validation, session storage, status rules, display helpers, staff filters and paging, status-history display, the CSV export, SLA states and badges, analytics ranges and panels, and the New Ticket category messages. `SlaBadge` and `AnalyticsPanels` are rendered to HTML. Other screens are verified with real-browser workflows (customer, agent, admin, cross-role, backend outages, layouts), listed in [docs/TEST_EVIDENCE.md](docs/TEST_EVIDENCE.md); those scripts are not part of the repository yet. Run `npm run build` to check the app compiles.
+**Frontend:** `cd frontend && npm test` runs the suite with Node's built-in runner and four pinned test dependencies: `jsdom` 29.1.1, `@testing-library/react` 16.3.3, `@testing-library/dom` 10.4.2 and `@testing-library/user-event` 14.6.8. Latest result, including Linux CI: **417 tests, 83 suites, 0 failed, 0 skipped**. Run `npm run build` to check the app compiles.
+
+- **Unit tests:** the API layer against a fake `fetch` (methods, URLs, bodies, error handling), form validation, session storage, status rules, display helpers, staff filters and paging, status-history display, the CSV export, SLA states and badges, analytics ranges and panels, and the New Ticket category messages. Some render components such as `SlaBadge` and `AnalyticsPanels` to static HTML.
+- **Real React DOM tests:** real screens rendered in jsdom, with typing and clicking through Testing Library and only `fetch` faked. They cover route guards, expired sessions, sign-in and sign-up, My Tickets, New Ticket, customer ticket details, Agent Inbox, the Admin Tickets dialog and Account Security. Not every screen is covered: [docs/FRONTEND_RENDER_TEST_PLAN.md](docs/FRONTEND_RENDER_TEST_PLAN.md) lists the coverage and remaining gaps.
+- **Not implemented:** browser, visual and end-to-end tests. DOM tests do not show layout, appearance or real API responses. Earlier scripted real-browser checks (customer, agent, admin, cross-role, backend outages, layouts) ran outside the repository and are historical; see [docs/TEST_EVIDENCE.md](docs/TEST_EVIDENCE.md).
 
 ## Continuous integration
 

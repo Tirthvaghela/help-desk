@@ -1,10 +1,10 @@
 # Help Desk — Test Evidence
 
-What has been tested, how, and with what result, as of **30 October 2026**. It records only checks that were actually run; anything not run is listed under [Not verified yet](#7-not-verified-yet).
+What has been tested, how, and with what result, as of **31 October 2026**. It records only checks that were actually run; anything not run is listed under [Not verified yet](#7-not-verified-yet).
 
-The results apply to the `main` branch at `91c4037` **plus the uncommitted working tree** of that date (filters, staff status history, duplicate-submission protection, demo data, ticket status emails, SLA due dates and badges, admin analytics, the redesigned email templates, the New Ticket category messages, the one-time link and log privacy fixes). Re-run the commands in [§8](#8-how-to-reproduce) after these changes are committed.
+This update began from the `main` branch at `85511b4` **plus the uncommitted working tree** of that date: the admin ticket conversation (P1-1), the admin priority control (P2-1), the email-change status after a failed reload (P2-2) and the malformed-request error responses (P2-3). All four have since been merged. The last local backend and frontend runs used `75cd711` plus the uncommitted zstd refusal, which is the code then committed as `b6eed94` and merged through PR #16 as `cbaf2fd`. Their working tree also held other uncommitted, non-code files, so it was not a clean checkout.
 
-**Fresh and historical results.** The automated test counts and the build result in §1 and §2 were re-run on 30 October 2026, after the last change to the code. Everything in §3 and §4 is **historical**: each ran once against the code of its day and was not repeated for this update. §5 lists user-reported manual checks, which were not independently verified.
+**Fresh and historical results.** The backend and frontend suites and the build in §1 and §2 were re-run locally on Windows on 31 October 2026, after the last change to the code. The GitHub Actions results in §2 ran on Linux on 30 and 31 October 2026 and cover committed code only. Runs from PR #15 onward cover P2-2. The PR #16 runs cover P2-3: `41206955716` failed on one zstd test, and `41209682682` and `41209956284` passed with the final code. Everything in §3 and §4 is **historical**: each ran once against the code of its day and was not repeated for this update. §5 lists user-reported manual checks, which were not independently verified.
 
 ## Contents
 
@@ -21,20 +21,23 @@ The results apply to the `main` branch at `91c4037` **plus the uncommitted worki
 
 | | |
 | --- | --- |
-| OS | Windows 11 |
-| Node.js | 22.14.0 |
-| MongoDB | 8.2.4, local (`127.0.0.1:27017`) |
+| Local OS | Windows 11 |
+| Local Node.js | 22.14.0. The P2-3 backend tests also ran on 22.23.4, the official Windows build of CI's version, and the focused tests on 24.22.1, VS Code's bundled runtime, because 22.14.0 cannot decompress zstd |
+| Local MongoDB | 8.2.4, on the same machine |
+| Linux CI | GitHub Actions `ubuntu-latest` (image `ubuntu-26.04`), Node 22, `mongo:7` service container |
 | Browser | Google Chrome 156, headless, driven through the DevTools protocol |
-| Test databases | `helpdesk_test` (automated tests; the helpers refuse any name not ending in `_test`) and `helpdesk_browser_test` (browser checks). Neither the shared Atlas database nor any real user data was used. |
+| Test databases | `helpdesk_test` (automated tests; `test/setup.js` selects it ahead of `backend/.env`, and the helpers refuse any name not ending in `_test`) and `helpdesk_browser_test` (browser checks). Neither the shared Atlas database nor any real user data was used. |
+| Email in automated tests | In-memory transport, set by `test/setup.js`. `statusEmails` also exercises the outbox transport in a temporary folder, and `logPrivacy` uses simulated SMTP errors. No test sends a real email. |
 
 ## 1. Summary
 
 | Kind | Result |
 | --- | --- |
-| Backend automated tests (fresh) | **554 tests: 553 passed, 0 failed, 1 skipped** (120 suites), MongoDB required (`REQUIRE_TEST_DB=1`). The skipped test sends a real `SIGTERM`, which Windows cannot deliver; it runs on Linux (CI, hosting) |
-| Frontend unit tests (fresh) | **155 passed, 0 failed, 0 skipped** (36 suites) |
-| Frontend production build (fresh) | **Succeeds** (`vite build`, 83 modules) |
-| Real-browser checks (historical) | 15 scripted workflows on an isolated local stack; results in §4. One defect found (paging) and fixed, then re-checked. SLA badges were checked first with simulated `dueAt`, then against the real backend; analytics and customer categories against the real backend |
+| Backend automated tests (local Windows, Node 22.14.0, 31 Oct, the code committed as `b6eed94`) | **616 tests: 615 passed, 0 failed, 1 skipped** (123 suites), MongoDB required (`REQUIRE_TEST_DB=1`). Skip reason as reported by the runner: `SIGTERM cannot be delivered on Windows` |
+| Frontend tests (local Windows, Node 22.14.0, 31 Oct, the code committed as `b6eed94`) | **417 passed, 0 failed, 0 skipped** (83 suites) |
+| Frontend production build (local Windows, Node 22.14.0, 31 Oct, the code committed as `b6eed94`) | **Succeeds** (`vite build`, 83 modules) |
+| GitHub Actions (Linux, Node 22.23.4, 31 Oct, latest run `41209956284` at `cbaf2fd`, the merge of PR #16) | **Success.** Backend **623 tests: 623 passed, 0 failed, 0 skipped** (123 suites), including the real `SIGTERM` test; frontend **417 passed, 0 failed, 0 skipped** (83 suites); build step succeeded. Includes P2-2 and P2-3 |
+| Real-browser checks (historical) | 15 scripted workflows on an isolated local stack; results in §4. One defect found (paging) and fixed, then re-checked. SLA badges were checked first with simulated `dueAt`, then against the real backend; analytics and customer categories against the real backend. **None of them covers P1-1, P2-1 or P2-2** |
 | Manual checks (user-reported) | One real email received and categories visible on the real frontend; §5 |
 | Full real-mailbox tests, deployed app, other browsers | **Not verified** (§7) |
 | Log privacy | Failed emails and request logs fixed and tested with simulated errors, not a live SMTP server; the remaining gaps are in §6 |
@@ -45,7 +48,26 @@ The results apply to the `main` branch at `91c4037` **plus the uncommitted worki
 
 Node's built-in test runner with Supertest against the real Express app and a real local MongoDB. Each file runs on its own, against the guarded `helpdesk_test` database, which is cleared between tests.
 
-Last run (30 October 2026, fresh): **554 tests, 120 suites: 553 passed, 0 failed, 0 cancelled, 1 skipped**, with `REQUIRE_TEST_DB=1` (a missing database fails the run instead of skipping tests), about 2 minutes. The one skip is the real-`SIGTERM` test below, skipped on Windows only.
+Last local runs (31 October 2026, Windows, the code committed as `b6eed94`), against the local `helpdesk_test` database with `REQUIRE_TEST_DB=1` (a missing database fails the run instead of skipping tests) and the in-memory email configuration, about 2 minutes each:
+
+- Node 22.14.0: **616 tests, 123 suites: 615 passed, 0 failed, 0 cancelled, 1 skipped**.
+- Node 22.23.4: **623 tests, 123 suites: 622 passed, 0 failed, 0 cancelled, 1 skipped**. The 7 extra tests need a runtime that can decompress zstd.
+
+Historical: earlier P2-3 runs on Node 22.14.0 had 574 and then 596 tests, before the last P2-3 tests were added.
+
+The one skip is `a real SIGTERM: serves, then stops cleanly with exit status 0` in `serverLifecycle.test.js`. The test declares a skip on Windows only, and the runner's output gives the reason as `SIGTERM cannot be delivered on Windows`.
+
+**zstd request bodies (P2-3).** The real app refuses any request with `Content-Encoding: zstd` with 415 `UNSUPPORTED_ENCODING` before body parsing (`rejectZstdBodies` in `app.js`), whether the body is complete or truncated, in any letter case, alone or in an encoding list. Valid gzip, deflate and Brotli bodies are still decoded. The refusal exists because CI run `41206955716` found that Node 22.23.4 raises no error for a truncated zstd body: that test got 200 instead of 400. Node's fix (PR #64593) is listed in the 24.20.0 and 26.6.0 changelogs, with no entry in the 22.x changelog when this was checked. The zstd error mappings stay in `errorHandler.js`, and are tested on a bare parser because the real app no longer reaches them.
+
+Focused P2-3 runs of `errors.test.js` (31 October 2026, Windows, the code committed as `b6eed94`). The count depends on the runtime, because 7 of the bare-parser and decoder tests need zstd in the runtime. Historical: earlier runs, before the last P2-3 tests were added, had 35 tests, then 57 on Node 22.14.0 and 64 on Node 24.22.1.
+
+| Node.js | Focused result | zstd in the runtime |
+| --- | --- | --- |
+| 22.14.0 | **77 passed, 0 failed, 0 skipped** | Not available, so the runtime's decoder is not exercised. The real app still answers 415 |
+| 22.23.4 | **84 passed, 0 failed, 0 skipped** | Available: the real app answers 415, and a refused body never reaches the decoder |
+| 24.22.1 | **84 passed, 0 failed, 0 skipped** | Available: same result |
+
+P2-3 is merged. Its code and tests are commits `5b0b283` and `b6eed94`, which changed `backend/src/middleware/errorHandler.js`, `backend/src/app.js` and `backend/test/errors.test.js`. Its contract documentation is in `75cd711` and `b6eed94`. `git diff --check` passed before each commit.
 
 | Area | Files | What is checked |
 | --- | --- | --- |
@@ -56,7 +78,7 @@ Last run (30 October 2026, fresh): **554 tests, 120 suites: 553 passed, 0 failed
 | Agent and admin workflow | `agentWorkflow`, `ticketAccess`, `ticketAssign`, `ticketAssign.db`, `ticketQuery`, `ticketQuery.db`, `ticketStatus`, `ticketOwnership` | Queue scope (agents never see another agent's tickets), search and filters (status, priority, category, assignee), assignment, status transitions and their permissions (D-10), replies (D-11), concurrent changes, the end-to-end scenario |
 | Administration | `categories`, `categoryNameConflicts`, `adminUsers`, `adminStats`, `ticketStats` | Category management and case-insensitive uniqueness, user roles and activation, last active admin, statistics and date range |
 | Notifications | `notifications` | Who is notified for each event, never the actor, read/unread, cross-user protection |
-| Platform | `health`, `errors`, `validate`, `models`, `db-helpers`, `envConfig`, `securityHeaders`, `methodNotAllowed` | Health check, error format, validators, schemas, the test-database guard, configuration rules, security headers, `405` with `Allow` |
+| Platform | `health`, `errors`, `validate`, `models`, `db-helpers`, `envConfig`, `securityHeaders`, `methodNotAllowed` | Health check, error format, validators, schemas, the test-database guard, configuration rules, security headers, `405` with `Allow`. Malformed requests (P2-3): invalid JSON 400, unsupported charset (including `utf-99`) or `Content-Encoding` 415, invalid or truncated compressed bodies 400, a deflate body needing a preset dictionary 400, zstd request bodies 415 before parsing, complete or truncated, on the real app, valid gzip, deflate and Brotli bodies still decoded, gzip expanding past the real 100 kB limit 413, bad URL encoding in a route parameter 400, none repeating request text or parser wording; application `SyntaxError` and `URIError`, out-of-memory codes and other look-alike errors stay 500 |
 | SLA due dates | `sla`, `slaTickets` | Default targets 24/72/168 h; valid and invalid `SLA_HOURS_*` (text, decimals, 0, negatives, infinity, exponents, padding, over 8760) and the startup summary; due date for each priority in calendar hours; states at exact boundaries with fixed dates (25% left is "due soon", the deadline itself is not yet overdue, met/missed at the deadline); missing or invalid dates; due date stored on normal, idempotent and taken-over creation, unchanged by a replay; priority change recalculated from the original creation time in the same update; same priority, assignment and status changes leave it alone; a concurrent priority change gives 409 and priority and due date always match; resolved tickets refused; older tickets without a due date keep working; `dueAt` in staff responses only, never in customer responses |
 | Ticket status emails | `statusEmails` | One email to the ticket's own active customer per change to In progress or Resolved, by the assignee or an admin; contents (number, subject, both statuses, `CLIENT_URL` link even with a forged `Host`, reason, no staff names or emails, no other customers); HTML escaping; no email for rejected or repeated changes, assignment, release, priority, replies, or ticket creation and its replay; deactivated customer; a delivery failure keeps the change and logs no address or link; the response returns before the email is sent; tracking and bounded waiting for pending emails; the outbox transport (separate process, temporary folder); SMTP timeouts |
 | Log privacy | `logPrivacy` | Simulated SMTP rejections that quote the address, on each email path (`sendEmailQuietly`, `sendInBackground`, ticket status, password reset, email change, password-changed notice), and a forgot-password request that fails before sending: the log has the purpose and codes only, with no address, link, token or server reply. Request logs in both formats, and the real app in development and production (separate process): method, path, status and timing stay; the query string and the referrer's query do not |
@@ -67,15 +89,34 @@ Last run (30 October 2026, fresh): **554 tests, 120 suites: 553 passed, 0 failed
 
 ### Frontend — `cd frontend && npm test` and `npm run build`
 
-Unit tests with Node's built-in runner (no browser). Last run (30 October 2026, fresh): **155 tests, 36 suites: 155 passed, 0 failed, 0 skipped** across `api`, `account`, `logic`, `dashboardUrl`, `queueFilters`, `statusHistory`, `sla`, `analytics` and `newTicketCategories`. They cover the API layer against a fake `fetch` (methods, URLs, bodies, headers, errors), form validation, session handling, the staff permission rules, filter and paging logic, status-history display data and the CSV export.
+Tests with Node's built-in runner (no browser). Last local run (31 October 2026, Windows, Node 22.14.0, the code committed as `b6eed94`): **417 tests, 83 suites: 417 passed, 0 failed, 0 skipped** across `api`, `account`, `accountSecurity`, `adminConversation`, `adminPriority`, `logic`, `dashboardUrl`, `queueFilters`, `statusHistory`, `sla`, `analytics`, `newTicketCategories`, `renderTrial` and the seven `*.render` files. They cover the API layer against a fake `fetch` (methods, URLs, bodies, headers, errors), form validation, session handling, the staff permission rules, filter and paging logic, status-history display data and the CSV export.
 
-`sla` (28 tests, fixed dates, never the system clock) covers all six SLA states; the exact 25% boundary, the deadline itself and just after it; resolved before, at and after the deadline; missing, null and invalid dates; a missing `resolvedAt`; older tickets; and the time formats (minutes, hours, days and hours, under a minute, rounding down, no negatives). It also renders the real `SlaBadge` to HTML through Vite and `react-dom/server`, and checks that customer screens do not use the badge or `dueAt`. `analytics` (35 tests) covers the date presets, custom ranges with time-zone and daylight-saving conversion, date validation, the CSV range, percentages and display data, and renders the real `AnalyticsPanels` in its loading, refreshing, failed, missing-data and empty states. `newTicketCategories` (6 tests) covers recognising an inactive-category response, that its text still matches the backend, and the approved New Ticket messages. `SlaBadge` and `AnalyticsPanels` are the only React components the unit tests render; screens are covered by §4.
+Added since `85511b4` (155 tests): `adminConversation` (30 tests, P1-1), `adminPriority` (29 tests, P2-1), the P0 render tests (177 tests) and `accountSecurity` (26 tests, P2-2). The first two render parts of the dialog to HTML, run its logic against a fake API, and check how those parts are connected only by patterns in the source.
 
-The production build (`npm run build`) succeeds: 83 modules, last run 30 October 2026 (fresh).
+`accountSecurity` (P2-2, commit `8e56930c5306828d32877b0e5cb0e5bdd718cafe`, merged through PR #15 as `0f351b3017a7e13d512da4f450ed18543789a921`) renders the real `/profile` page with real React in jsdom, using the shared helpers in `test/helpers/`. Typing and clicking go through Testing Library's `userEvent`, and only `fetch` is faked: a request with no matching route, or unexpected console output, fails the test. It has 21 tests migrated from a test-only stand-in for React's hooks, which has been deleted, and 5 new ones: a retry that fails again, a retry answered with `401`, the state while a retry runs, an account deactivated during a refresh, and a double click on the retry. **There is no visible loading indicator during that retry:** the warning and its button are removed until the answer arrives, and the test records that behaviour. These are DOM tests: none of them runs in a browser.
 
-### Continuous integration
+`sla` (28 tests, fixed dates, never the system clock) covers all six SLA states; the exact 25% boundary, the deadline itself and just after it; resolved before, at and after the deadline; missing, null and invalid dates; a missing `resolvedAt`; older tickets; and the time formats (minutes, hours, days and hours, under a minute, rounding down, no negatives). It also renders the real `SlaBadge` to HTML through Vite and `react-dom/server`, and checks that customer screens do not use the badge or `dueAt`. `analytics` (35 tests) covers the date presets, custom ranges with time-zone and daylight-saving conversion, date validation, the CSV range, percentages and display data, and renders the real `AnalyticsPanels` in its loading, refreshing, failed, missing-data and empty states. `newTicketCategories` (6 tests) covers recognising an inactive-category response, that its text still matches the backend, and the approved New Ticket messages. `SlaBadge`, `AnalyticsPanels` and the parts of the Admin Tickets dialog above are rendered as static HTML. Separately, the P0 render tests and the P2-2 `accountSecurity` tests render real screens with real React in jsdom, many of them driven by simulated clicks and typing: route guards, expired sessions, sign-in and sign-up, `MyTickets`, New Ticket, customer ticket details, `AgentInbox`, the Admin Tickets dialog and `AccountSecurity`. This is DOM testing with `fetch` faked, not browser, visual or end-to-end testing, and it does not cover every screen: `docs/FRONTEND_RENDER_TEST_PLAN.md` §4 lists the coverage and the remaining gaps. The browser checks in §4 of this document are historical, with the limits stated there.
 
-`.github/workflows/ci.yml` runs both suites on every pull request into `main` (backend with a MongoDB 7 service and `REQUIRE_TEST_DB=1`; frontend tests and build). The working-tree changes above have **not** been through CI yet, because they are not committed.
+The production build (`npm run build`) succeeds: 83 modules, last local run 31 October 2026 (Windows, the code committed as `b6eed94`).
+
+### Continuous integration (Linux)
+
+`.github/workflows/ci.yml` runs both suites on Linux for every pull request into `main` and every push to `main` (backend with a MongoDB 7 service and `REQUIRE_TEST_DB=1`; frontend tests and build). Runs read from the GitHub Actions job logs, most recent first. PR run `41209682682` tested the PR #16 branch, and merge run `41209956284` tested the merge commit. Run `41206955716` failed and is kept because it found the zstd defect. The older runs, from PR #15 back, are historical:
+
+| Run | Commit | Started (UTC) | Trigger | Backend tests job | Frontend tests and build job |
+| --- | --- | --- | --- | --- | --- |
+| `41209956284` | `cbaf2fd` (merge of PR #16, current verified `main`) | 31 Oct 2026, 14:24 | Push to `main` | Success: 623 tests, 123 suites, 623 passed, 0 failed, 0 skipped | Success: 417 tests, 83 suites, 417 passed, 0 failed, 0 skipped; build step succeeded |
+| `41209682682` | `b6eed94` (PR #16 branch) | 31 Oct 2026, 14:20 | Pull request | Success: 623 tests, 123 suites, 623 passed, 0 failed, 0 skipped | Success: 417 tests, 83 suites, 417 passed, 0 failed, 0 skipped; build step succeeded |
+| `41206955716` | `75cd711` (PR #16 branch) | 31 Oct 2026, 13:44 | Pull request | **Failure:** 603 tests, 122 suites, 602 passed, 1 failed, 0 skipped. A truncated zstd body returned 200 instead of 400 | Success: 417 tests, 83 suites, 417 passed, 0 failed, 0 skipped; build step succeeded |
+| `41202057252` | `0f351b3` (merge of PR #15) | 31 Oct 2026, 12:39 | Push to `main` | Success: 554 tests, 120 suites, 554 passed, 0 failed, 0 skipped | Success: 417 tests, 83 suites, 417 passed, 0 failed, 0 skipped; build step succeeded |
+| `41201715461` | `8e56930` (PR #15 branch) | 31 Oct 2026, 12:34 | Pull request | Success: 554 tests, 120 suites, 554 passed, 0 failed, 0 skipped | Success: 417 tests, 83 suites, 417 passed, 0 failed, 0 skipped; build step succeeded |
+| `41199487590` | `c756137` (merge of PR #14) | 31 Oct 2026, 12:04 | Push to `main` | Success: 554 tests, 120 suites, 554 passed, 0 failed, 0 skipped | Success: 391 tests, 79 suites, 391 passed, 0 failed, 0 skipped; build step succeeded |
+| `41098540772` | `85511b4` (merge of PR #12) | 30 Oct 2026, 17:24 | Push to `main` | Success: 554 tests, 120 suites, 554 passed, 0 failed, 0 skipped | Success: 155 tests, 36 suites, 155 passed, 0 failed, 0 skipped; build step succeeded |
+| `41098190993` | `1531eb3` (PR #12 branch) | 30 Oct 2026, 17:22 | Pull request | Success: 554 tests, 120 suites, 554 passed, 0 failed, 0 skipped | Success: 155 tests, 36 suites, 155 passed, 0 failed, 0 skipped; build step succeeded |
+
+The real `SIGTERM` test ran and passed on Linux in all eight runs. Runs `41202057252` and `41209956284` are confirmed to have tested the merge commits themselves: each run's head commit and both jobs report the merge commit, not the earlier PR commit.
+
+**Local Windows and Linux CI are different evidence.** CI ran committed code on Linux, where the `SIGTERM` test runs; the local runs were on Windows, where it is skipped. On Node 22.23.4 the backend has 623 tests in both places: 623 passed in CI, and locally 622 passed with 1 skipped. On Node 22.14.0 it has 616, because 7 tests need zstd in the runtime. The frontend total is 417 in both places, because P2-3 changes only the backend. The runs before PR #15 are historical, with lower frontend totals.
 
 ### Analytics performance (historical)
 
@@ -124,7 +165,7 @@ Scripted workflows in headless Chrome against an isolated local stack: frontend 
 
 **What the simulated SLA badge workflow does and does not show.** When it ran, the API on port 4100 predated the SLA work and returned no `dueAt`. The script therefore added `dueAt` values, and for some tickets a status, resolution time and assignee, to ticket responses inside Chrome, and answered ticket changes in Chrome without sending them to the server (5 such changes in the final run). This checks how the real screens display and refresh SLA data; the "real backend" row above is what shows they work with the real API. No ticket's status, priority, assignee or update time changed in `helpdesk_browser_test`. The real API's `dueAt` behaviour is covered separately by the backend tests in §2.
 
-Duplicate-submission protection (C-3) has **not** been checked in a browser; it is covered by the API tests in §2.
+Duplicate-submission protection (C-3) has **not** been checked in a browser; it is covered by the API tests in §2. The same is true of the admin ticket conversation (P1-1), the admin priority control (P2-1) and the email-change status fix (P2-2), which are covered only by the automated tests in §2.
 
 ## 5. Manual checks reported by the user
 
@@ -163,16 +204,20 @@ Checked by `logPrivacy` with simulated errors. It has **not** been seen with a l
 | Log privacy with a real SMTP rejection | Simulated errors only (§6); no real email was sent |
 | Deployed application: HTTPS, HSTS, CORS for the real frontend address, health check on the host, logs | Not deployed yet |
 | Running behind a hosting proxy (client IP for rate limits, HTTPS detection) | Needs a host; see README "Deployment readiness" |
-| The current changes in CI | Not committed yet |
+| P1-1, P2-1, P2-2 and P2-3 in a real browser, including visual checks | Automated tests only (§2). The DOM tests simulate clicks and typing in jsdom: no real browser, layout, visual appearance or real API responses |
+| A visible loading indicator during the Account Security retry | Does not exist, so it cannot be verified. The warning and its button are removed while the retry runs (§2) |
+| A clean-clone run | Not performed: the local runs reused the installed dependencies and the working tree. CI does install from scratch, but only for committed code |
+| Bad URL encoding outside a route parameter (P2-3) | It does not reach the error handler: on an isolated test app, a bad path gave 404 and a bad query string gave 200 with a garbled value. Left as it is |
+| Parser errors not seen in practice (P2-3) | Aborted requests and invalid sizes were never triggered, so they are not mapped. A simulated `request.aborted` error stays 500. The decompression codes are listed one by one, so an unlisted one also stays 500. The real app refuses zstd before parsing, so it no longer reaches the listed zstd codes. Two of them, `ZSTD_error_version_unsupported` and `ZSTD_error_literals_headerWrong`, were never seen from a real body and are tested by simulated errors only |
 | Browsers other than Chrome; real phones | Only headless Chrome, with phone width emulated for some screens |
 | Screen-reader and keyboard-only accessibility review | Not performed |
 | Load or performance testing | Not performed |
 | Duplicate-submission protection in a browser | API-tested only |
-| A real `SIGTERM` to the API process | Windows cannot deliver it; the test runs on Linux (CI) but has not been run there yet, because the change is not committed. The shutdown logic itself is tested on every platform with simulated signals |
+| A real `SIGTERM` to the API process on Windows | Windows cannot deliver it, so it is skipped locally. It passed on Linux in CI at `cbaf2fd` (§2). The shutdown logic itself is tested on every platform with simulated signals |
 | `TRUST_PROXY` (client address and HTTPS behind a host's proxy) | Proposed only; depends on the chosen host |
 | Ticket changes in the final analytics browser run | Status, priority and assignment changes were not repeated there, because that run adds no data. They are covered by the backend suite and the real-backend SLA run above, on the same ticket code |
 | Analytics on a hosted database | Timings are local only. Real (Atlas) data has not been read: older tickets there are expected to show as No SLA |
-| A priority change refreshing the badge in Admin Tickets | The admin dialog has no priority control, so this does not apply there. It was checked in Agent Inbox, with both simulated and real data |
+| A priority change refreshing the badge in Admin Tickets, in a browser | The admin dialog gained a priority control in P2-1. The badge and deadline are checked from a fake API response in unit and DOM tests (`adminTickets.render`), not in a browser. In a browser this was checked in Agent Inbox, with both simulated and real data, before P2-1 |
 
 ## 8. How to reproduce
 
@@ -191,4 +236,4 @@ npm test
 npm run build
 ```
 
-Expected: backend `# pass 553`, `# fail 0`, `# skipped 1` on Windows (`# pass 554`, `# skipped 0` on Linux); frontend `# pass 155`, `# fail 0`; the build ends with `built in …`.
+Expected on Windows at `cbaf2fd` with Node 22.14.0: backend 615 passed, 0 failed, 1 skipped; frontend 417 passed, 0 failed; the build ends with `built in …`. With Node 22.23.4 on Windows the backend gives 622 passed, 0 failed, 1 skipped, because the count depends on whether the runtime has zstd (§2). On Linux the `SIGTERM` test is not skipped; the latest CI run listed in §2, at `cbaf2fd`, gave backend 623 passed, 0 skipped, and frontend 417 passed.
