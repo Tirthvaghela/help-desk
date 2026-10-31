@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import app from '../src/app.js';
 import { startServer, SHUTDOWN_TIMEOUT_MS } from '../src/startServer.js';
+import { freePort } from './helpers/freePort.js';
 
 // Startup errors and graceful shutdown (src/startServer.js). Everything runs in this process on
 // spare ports (port 0), with fake signals, database and exit: no real signal is sent and no
@@ -275,7 +276,7 @@ describe('server.js in a separate process', () => {
   it('a real SIGTERM: serves, then stops cleanly with exit status 0', { skip: process.platform === 'win32' && 'SIGTERM cannot be delivered on Windows' }, async (t) => {
     if (!(await requireDB(t))) return;
     let signalled = false;
-    const { code, out, err } = await runServer(0, (text, child) => {
+    const { code, out, err } = await runServer(await freePort(), (text, child) => {
       const match = text.match(/API listening on http:\/\/localhost:(\d+)/);
       if (match && !signalled) {
         signalled = true;

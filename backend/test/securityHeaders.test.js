@@ -113,8 +113,8 @@ describe('HSTS (securityHeaders factory)', () => {
   });
 
   it('the real app turns HSTS on with NODE_ENV=production (checked in a child process)', () => {
-    // A trusted proxy is simulated by setting "trust proxy" on the imported app; no database
-    // is contacted (/api/health only reads the connection state).
+    // A trusted proxy is simulated by setting "trust proxy" on the imported app. /api/health tries
+    // the local test database first, and answers with these headers whether or not it is reachable.
     const script = [
       "const { default: request } = await import('supertest');",
       "const { default: app } = await import('./src/app.js');",

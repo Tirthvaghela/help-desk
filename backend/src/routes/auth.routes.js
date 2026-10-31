@@ -11,6 +11,7 @@ import {
   verifyEmailChange,
 } from '../controllers/accountSecurity.controller.js';
 import { requireAuth } from '../middleware/auth.js';
+import { requireDatabase } from '../middleware/database.js';
 import { createRateLimiter } from '../middleware/rateLimit.js';
 import { env } from '../config/env.js';
 
@@ -25,8 +26,8 @@ const resetRequestLimit = createRateLimiter({ ...env.sensitiveRateLimit, name: '
 const tokenLimit = createRateLimiter({ ...env.sensitiveRateLimit, name: 'attempts with this link' });
 const securityChangeLimit = createRateLimiter({ ...env.sensitiveRateLimit, name: 'security changes' });
 
-router.post('/register', registerLimit, register);
-router.post('/login', loginLimit, login);
+router.post('/register', registerLimit, requireDatabase, register);
+router.post('/login', loginLimit, requireDatabase, login);
 router.get('/me', requireAuth, me);
 router.patch('/me', requireAuth, updateMe);
 
@@ -35,9 +36,9 @@ router.post('/me/password', requireAuth, securityChangeLimit, changePassword);
 router.get('/me/email', requireAuth, getEmailChange);
 router.post('/me/email', requireAuth, securityChangeLimit, requestEmailChange);
 router.delete('/me/email', requireAuth, cancelEmailChange);
-router.post('/verify-email', tokenLimit, verifyEmailChange);
-router.post('/forgot-password', resetRequestLimit, forgotPassword);
-router.post('/reset-password/check', tokenLimit, checkResetToken);
-router.post('/reset-password', tokenLimit, resetPassword);
+router.post('/verify-email', tokenLimit, requireDatabase, verifyEmailChange);
+router.post('/forgot-password', resetRequestLimit, requireDatabase, forgotPassword);
+router.post('/reset-password/check', tokenLimit, requireDatabase, checkResetToken);
+router.post('/reset-password', tokenLimit, requireDatabase, resetPassword);
 
 export default router;

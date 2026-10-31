@@ -276,9 +276,9 @@ Never commit `.env`. Only the `.env.example` files, which contain dummy values, 
 | `PASSWORD_RESET_TTL_MINUTES` | No (default 30) | Reset-link lifetime | `30` |
 | `EMAIL_CHANGE_TTL_HOURS` | No (default 24) | Email-confirmation link lifetime | `24` |
 | `SLA_HOURS_HIGH`, `SLA_HOURS_MEDIUM`, `SLA_HOURS_LOW` | No (defaults 24, 72, 168) | Resolution target per priority, in whole calendar hours from 1 to 8760 (one year). Anything else stops the server at startup. See [SLA due dates](#sla-due-dates). | `24`, `72`, `168` |
-| `MONGODB_URI_TEST` | No | Test database for `npm test`. Name must end in `_test`. **Set it in the shell, not in this file:** the test setup reads it before dotenv loads `.env`, so a value in `.env` has no effect. | `mongodb://127.0.0.1:27017/helpdesk_test` (default) |
+| `MONGODB_URI_TEST` | No | Test database for `npm test`. Must be a local MongoDB, and the name must end in `_test`. **Set it in the shell, not in this file:** the test setup reads it before dotenv loads `.env`, so a value in `.env` has no effect. | `mongodb://127.0.0.1:27017/helpdesk_test` (default) |
 
-The backend exits on startup with a clear message if a required variable is missing or MongoDB is unreachable. **With `NODE_ENV=production` it also refuses a `JWT_SECRET` shorter than 32 characters or equal to the `.env.example` placeholder** (the message never shows the secret). Development and test accept any non-empty value.
+The backend exits on startup with a clear message if a required variable is missing. `npm start` and `npm run dev` also exit if MongoDB is unreachable; where the app runs as a function, the first request that needs the database connects instead (see [Deployment readiness](#deployment-readiness)). **With `NODE_ENV=production` it also refuses a `JWT_SECRET` shorter than 32 characters or equal to the `.env.example` placeholder** (the message never shows the secret). Development and test accept any non-empty value.
 
 ### Email
 
@@ -394,11 +394,12 @@ What the backend tests cover:
 - `emailTemplates.test.js`: the ticket status and password reset emails (layout, HTML and plain-text parts, wording, links, escaping, the `Hi there,` fallback, no staff data, reset expiry, tokens never in logs)
 - `statusEmails.test.js`: ticket status emails (recipient, contents, escaping, no email for rejected or unrelated changes, inactive customers, delivery failures, background delivery), the outbox transport and SMTP timeouts
 - `logPrivacy.test.js`: simulated SMTP rejections quoting the address on each email path, and request-log redaction, leave no address, link or server reply in the logs
+- `databaseConnection.test.js`: connecting on demand, losing and regaining the database through a local proxy (the client is kept, work in flight survives), the health ping, and which answers do and do not need the database
 - `health.test.js`, `errors.test.js`, `validate.test.js`, `models.test.js`, `db-helpers.test.js`, `envConfig.test.js`, `securityHeaders.test.js`, `methodNotAllowed.test.js`: health check, error envelope, helpers, models, the test-database guard, configuration rules, security headers, `405` responses
 
 Latest results and the browser checks performed are recorded in [docs/TEST_EVIDENCE.md](docs/TEST_EVIDENCE.md).
 
-**Your development data is safe.** `npm test` always uses `MONGODB_URI_TEST` from the shell (default `mongodb://127.0.0.1:27017/helpdesk_test`) and ignores `MONGODB_URI` in your `.env`. The test setup reads it before dotenv loads `.env`, so it cannot be set there. The helpers in `test/helpers/db.js` refuse to connect to or clear any database whose name does not end in `_test`.
+**Your development data is safe.** `npm test` always uses `MONGODB_URI_TEST` from the shell (default `mongodb://127.0.0.1:27017/helpdesk_test`) and ignores `MONGODB_URI` in your `.env`. The test setup reads it before dotenv loads `.env`, so it cannot be set there. With `npm test`, every test file stops before it can connect if `MONGODB_URI_TEST` is not a `mongodb://` URI on this machine (`localhost`, `127.x.x.x` or `[::1]`) naming a database that ends in `_test`, and the helpers in `test/helpers/db.js` also refuse to connect to or clear anything else, so Atlas and other remote databases cannot be used through them. **Always run the tests with `npm test`:** this safety check is a preload (`test/setup.js`), which running a file directly with `node --test` skips. Without it, the app can read `MONGODB_URI` from your `.env`. The check validates the configured URI, not every connection a test could open by itself.
 
 Most tests do not need MongoDB. Tests that do need it are **skipped** (shown as `# SKIP` with a reason) if MongoDB is not running. Set `REQUIRE_TEST_DB=1` to make them **fail** instead; CI always does this.
 
@@ -450,7 +451,7 @@ npm run build
 | Install | `cd backend && npm ci` | `cd frontend && npm ci` |
 | Build | none | `npm run build` → `frontend/dist/` |
 | Start | `npm start` (`node src/server.js`), Node 22.12 or newer | serve `frontend/dist/` as a static site |
-| Health check | `GET /api/health`: **200** `{"status":"ok","database":"connected",…}`; **503** `{"status":"degraded","database":"disconnected",…}` when MongoDB is unreachable. It only reads the connection state, so it is cheap to poll. | |
+| Health check | `GET /api/health`: **200** `{"status":"ok","database":"connected",…}`; **503** `{"status":"degraded","database":"disconnected",…}` when MongoDB does not answer. Any such answer means the API process is running. Each call pings the database (limit about 2.5 s, plus up to about 7 s to connect first if there is no connection yet), so avoid polling it more often than monitoring needs. | |
 
 **Backend environment variables** (set them in the host's secret settings, never in Git; values are described in [Environment variables](#environment-variables)):
 
@@ -473,7 +474,22 @@ The API refuses to start, with a message naming the problem, if a required varia
 | Express `trust proxy` is not configured | Behind the host's HTTPS proxy every request appears to come from the proxy: sign-in rate limits are shared by all users, and HSTS is never sent | `TRUST_PROXY`, below, once the host is chosen |
 | Rate limits are kept in memory | Correct for one instance only | Run a single instance, or add a shared store later |
 
-**Startup and shutdown** (`backend/src/startServer.js`): a port that cannot be opened is reported ("port … is already in use") and the process exits with status 1. On `SIGTERM` (sent by hosts on redeploy, and by `npm run dev` when it restarts) or `SIGINT` (Ctrl+C), the API stops accepting connections, lets requests in progress finish, closes idle connections, waits up to 5 seconds for ticket status emails still being sent, disconnects MongoDB and exits 0; after 10 seconds in total it gives up and exits 1. The forgot-password email is sent after its response and is not waited for, so a shutdown at that moment can lose it; the customer can request another link.
+**Database connection** (`backend/src/config/db.js`, `backend/src/middleware/database.js`): one MongoDB client per running process, with a pool of up to 10 connections and a limit of about 5 seconds to find a server.
+
+- `npm start` connects before listening and exits if it cannot. Where only `backend/src/app.js` runs, as on a host that runs the API as a function, nothing connects until a request needs the database, and requests arriving together share one attempt. A failed attempt is not remembered, so the next request tries again.
+- If the connection is lost, the client is **not** closed: requests may still be using it, and the driver reconnects it once the database answers. A request in the meantime pings it (limit about 5 s) and gets `503 DATABASE_UNAVAILABLE` if there is no answer.
+- A caller waits about 7 seconds at most for a connection. The attempt carries on after that, and later requests share its result. This limits how long a request waits, not the DNS lookup for a `mongodb+srv` URI, which the configured timeouts do not cover: while a slow lookup is running, requests can keep answering 503.
+- Requests that need no database keep their normal answers during an outage: 401, 404, 405 and preflights do not wait for it. The full list is in [docs/API_CONTRACT.md](docs/API_CONTRACT.md#database-unavailable).
+
+Limitations:
+
+- **A client that never recovers is not replaced.** Requests keep getting 503 until the driver reconnects it, the process restarts, or the host recycles the serverless instance.
+- **A write that gets 503 may have been applied.** If the connection is lost part-way, the outcome is uncertain, so re-read the data before retrying.
+- **Rate limits still count during an outage.** Sign-in and password-reset attempts that get 503 use up the limit, so repeated retries can give 429 once the database is back.
+- **The startup category check only runs with `npm start` and `npm run dev`.** On a host that runs only `app.js`, run `npm run check:categories` as part of deployment setup: names that differ only in case stop the unique name index from being built, and the running API does not report it there. `npm run seed:categories` also reports such conflicts.
+- **Not yet verified on a real host:** this has only been tested locally, against a standalone MongoDB behind a test proxy. Serverless behaviour (suspended instances, connection counts), `mongodb+srv` lookups and replica-set failover, such as on Atlas, still need a test after deployment.
+
+**Startup and shutdown** apply when the API runs as a long-lived process with `npm start`; they are not used where only `app.js` runs. In `backend/src/startServer.js`: a port that cannot be opened is reported ("port … is already in use") and the process exits with status 1. On `SIGTERM` (sent by hosts on redeploy, and by `npm run dev` when it restarts) or `SIGINT` (Ctrl+C), the API stops accepting connections, lets requests in progress finish, closes idle connections, waits up to 5 seconds for ticket status emails still being sent, disconnects MongoDB and exits 0; after 10 seconds in total it gives up and exits 1. The forgot-password email is sent after its response and is not waited for, so a shutdown at that moment can lose it; the customer can request another link.
 
 **`TRUST_PROXY` (proposed, not implemented yet).** It tells the API how many proxies sit in front of it, so that `req.ip` is the real client (rate limits) and `req.secure` reflects HTTPS at the proxy (HSTS).
 
@@ -482,7 +498,7 @@ The API refuses to start, with a message naming the problem, if a required varia
 
 **Data:** `npm run seed:demo` refuses remote databases. On a new production database, run `npm run seed:categories -- --allow-remote` and create the first admin with `npm run create:staff -- --allow-remote` (see [First run](#first-run-initialise-the-database)); never use the public demo password there.
 
-**After deploying, check:** `/api/health` returns 200; customer sign-up, ticket creation and an agent reply work from the deployed frontend (no CORS errors in the browser console); refreshing `/tickets` and a staff dashboard works; a password-reset email arrives (if SMTP is configured); the host's logs show the startup summary (database name, email transport, CORS origins) and request lines.
+**After deploying, check:** `/api/health` returns 200; customer sign-up, ticket creation and an agent reply work from the deployed frontend (no CORS errors in the browser console); refreshing `/tickets` and a staff dashboard works; a password-reset email arrives (if SMTP is configured); the host's logs show request lines, plus the startup summary (database name, email transport, CORS origins) if the API runs with `npm start`.
 
 ## API
 
@@ -490,7 +506,7 @@ The full API, with request/response shapes and error codes, is in **[docs/API_CO
 
 | Method | Endpoint | Access | Description |
 | --- | --- | --- | --- |
-| GET | `/api/health` | Public | API and database status (`200`, or `503` without a database) |
+| GET | `/api/health` | Public | API and database status (`200`, or `503` if the database does not answer a ping) |
 | POST | `/api/auth/register` | Public (rate limited) | Create a customer account → `{ user, token }` |
 | POST | `/api/auth/login` | Public (rate limited) | Sign in → `{ user, token }` |
 | GET / PATCH | `/api/auth/me` | Signed in | Current user; PATCH changes your own `name` only |
@@ -553,9 +569,9 @@ Express 5 forwards errors thrown in `async` route handlers automatically, so no 
 | Frontend shows "Cannot reach the server" | The backend is not running, or `VITE_API_URL` is wrong. Restart `npm run dev` in `frontend` after changing `.env`. |
 | Browser console shows a CORS error | The frontend address (including port) must be `CLIENT_URL` or listed in `CORS_ORIGINS` in `backend/.env`, e.g. `http://localhost:5173`. Restart the backend afterwards. |
 | Frontend `npm run dev` fails with "Port 5173 is already in use" | Another dev server holds the port (Vite no longer silently moves to 5174, which the API would refuse). Stop it, or run `npx vite --port 5174 --strictPort` and add `http://localhost:5174` to `CORS_ORIGINS`. |
-| Health check shows `503` / `database: disconnected` | The API is running but lost its MongoDB connection. Check that MongoDB is still running. |
+| Health check shows `503` / `database: disconnected`, or a request gets `503 DATABASE_UNAVAILABLE` | The API is running but MongoDB is not answering. Check that MongoDB is still running; for Atlas, also check Network Access. The API reconnects by itself once it answers, and the server log shows the reason with credentials masked. |
 | A database test shows `# SKIP MongoDB is not reachable` | Start MongoDB, or set `MONGODB_URI_TEST` in the shell. |
-| `npm test` says `Refusing to use database …` | `MONGODB_URI_TEST` points at a database whose name does not end in `_test`. |
+| `npm test` says `Refusing to use …` | `MONGODB_URI_TEST` is not a local MongoDB, or names a database that does not end in `_test`. |
 | `npm install` fails with `EBUSY` / `EPERM` on Windows | The folder is inside OneDrive or another synced folder. Pause syncing or move the project to a non-synced folder such as `C:\dev\help-desk`. |
 | `node: bad option: --watch` or Vite engine errors | Your Node.js is too old. Install Node 22 LTS. |
 

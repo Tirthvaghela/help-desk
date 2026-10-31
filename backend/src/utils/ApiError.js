@@ -32,4 +32,9 @@ export class ApiError extends Error {
   static conflict(message = 'Resource already exists', code = 'CONFLICT') {
     return new ApiError(409, code, message);
   }
+
+  // Always this text: the reason, which can name hosts, is only logged.
+  static databaseUnavailable() {
+    return new ApiError(503, 'DATABASE_UNAVAILABLE', 'The service is temporarily unavailable. Please try again in a moment.');
+  }
 }
