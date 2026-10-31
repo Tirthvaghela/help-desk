@@ -1,8 +1,10 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import zlib, { brotliCompressSync, deflateSync, gzipSync } from 'node:zlib';
 import express from 'express';
 import mongoose from 'mongoose';
 import request from 'supertest';
+import realApp from '../src/app.js';
 import { ApiError } from '../src/utils/ApiError.js';
 import { notFound, errorHandler } from '../src/middleware/errorHandler.js';
 
@@ -138,5 +140,282 @@ describe('errorHandler middleware', () => {
 
     assert.equal(res.status, 404);
     assert.equal(res.body.error.code, 'NOT_FOUND');
+  });
+});
+
+describe('malformed requests', () => {
+  const echo = (req, res) => res.json({ ok: true, body: req.body });
+  const app = appWithRoute(echo);
+  const paramApp = express().get('/item/:id', echo).use(errorHandler);
+  const post = (headers, body, { target = app, path = '/test' } = {}) => {
+    const pending = request(target).post(path).set('Content-Type', 'application/json');
+    for (const [name, value] of Object.entries(headers)) pending.set(name, value);
+    // Sent as given: by default a Buffer would be JSON-encoded, and never arrive as gzip.
+    return pending.serialize((data) => data).send(body);
+  };
+
+  // No stack, parser wording, or anything from the request in the answer.
+  function assertSafe(res, status, code, ...secrets) {
+    assert.equal(res.status, status);
+    assert.equal(res.body.error.code, code);
+    assert.deepEqual(Object.keys(res.body), ['error']);
+    assert.deepEqual(Object.keys(res.body.error), ['code', 'message']);
+    const text = JSON.stringify(res.body);
+    assert.doesNotMatch(text, /\bat .*:\d+:\d+|stack|node_modules|header check|Failed to decode|Missing dictionary|frame descriptor|Data corruption|checksum|too much memory|end of file/i);
+    for (const secret of secrets) assert.ok(!text.includes(secret), `the answer repeats ${secret}`);
+  }
+
+  it('malformed JSON is 400 INVALID_JSON and does not repeat the body', async () => {
+    assertSafe(await post({}, '{"password":"hunter2"'), 400, 'INVALID_JSON', 'hunter2');
+  });
+
+  for (const charset of ['koi8-r', 'not-a-charset']) {
+    it(`charset ${charset} is 415 UNSUPPORTED_CHARSET`, async () => {
+      assertSafe(await post({ 'Content-Type': `application/json; charset=${charset}` }, '{}'), 415, 'UNSUPPORTED_CHARSET', charset, charset.toUpperCase());
+    });
+  }
+
+  // Passes the parser's first check, which only looks for "utf-", and fails later in the decoder.
+  it('charset utf-99 is 415 UNSUPPORTED_CHARSET', async () => {
+    assertSafe(await post({ 'Content-Type': 'application/json; charset=utf-99' }, '{}'), 415, 'UNSUPPORTED_CHARSET', 'utf-99', 'UTF-99');
+  });
+
+  it('an unsupported Content-Encoding is 415 UNSUPPORTED_ENCODING', async () => {
+    assertSafe(await post({ 'Content-Encoding': 'bogus-coding' }, '{}'), 415, 'UNSUPPORTED_ENCODING', 'bogus-coding');
+  });
+
+  for (const encoding of ['gzip', 'deflate', 'br']) {
+    it(`a ${encoding} body that is not ${encoding} is 400 INVALID_BODY_ENCODING`, async () => {
+      assertSafe(await post({ 'Content-Encoding': encoding }, 'not compressed at all'), 400, 'INVALID_BODY_ENCODING');
+    });
+  }
+
+  it('a truncated gzip body is 400 INVALID_BODY_ENCODING', async () => {
+    const truncated = gzipSync('{"a":1}').subarray(0, 8);
+    assertSafe(await post({ 'Content-Encoding': 'gzip' }, truncated), 400, 'INVALID_BODY_ENCODING');
+  });
+
+  it('a deflate body that needs a preset dictionary is 400 INVALID_BODY_ENCODING', async () => {
+    const body = deflateSync('{"a":1}', { dictionary: Buffer.from('a preset dictionary') });
+    assertSafe(await post({ 'Content-Encoding': 'deflate' }, body), 400, 'INVALID_BODY_ENCODING');
+  });
+
+  it('gzip that expands past the real 100 kB limit is 413 PAYLOAD_TOO_LARGE', async () => {
+    const body = gzipSync(`{"a":"${'x'.repeat(200 * 1024)}"}`);
+    assert.ok(body.length < 100 * 1024, 'small enough to arrive under the limit');
+    const res = await post({ 'Content-Encoding': 'gzip' }, body, { target: realApp, path: '/api/auth/login' });
+    assertSafe(res, 413, 'PAYLOAD_TOO_LARGE');
+  });
+
+  // Every listed code gives the same answer, so a code this runtime cannot produce is still checked.
+  const decompressionCodes = [
+    'Z_DATA_ERROR',
+    'Z_BUF_ERROR',
+    'Z_NEED_DICT',
+    'ERR__ERROR_FORMAT_PADDING_2',
+    'ZSTD_error_prefix_unknown',
+    'ZSTD_error_version_unsupported',
+    'ZSTD_error_frameParameter_unsupported',
+    'ZSTD_error_frameParameter_windowTooLarge',
+    'ZSTD_error_corruption_detected',
+    'ZSTD_error_checksum_wrong',
+    'ZSTD_error_dictionary_wrong',
+    'ZSTD_error_literals_headerWrong',
+  ];
+  for (const code of decompressionCodes) {
+    it(`parser code ${code} is 400 INVALID_BODY_ENCODING`, async () => {
+      const res = await request(appWithRoute(() => {
+        throw Object.assign(new Error('secret internal detail'), { status: 400, code });
+      })).get('/test');
+      assertSafe(res, 400, 'INVALID_BODY_ENCODING', 'secret internal detail');
+    });
+  }
+
+  // The real app refuses zstd before parsing (below). These tests use a parser with no such refusal,
+  // to check the error mappings kept in errorHandler.js. body-parser decompresses zstd only where
+  // Node can: 22.15, 23.8 and later. Elsewhere it refuses the encoding, so each runtime is held to
+  // the answer it should give. A cut-off body is not tested here: its answer depends on the runtime,
+  // which is why the real app refuses zstd.
+  const zstdAvailable = 'createZstdDecompress' in zlib;
+  const [major, minor] = process.versions.node.split('.').map(Number);
+  const zstdExpected = major >= 24 || (major === 23 && minor >= 8) || (major === 22 && minor >= 15);
+
+  it(`Node ${process.versions.node} ${zstdExpected ? 'has' : 'does not have'} zstd decompression`, () => {
+    assert.equal(zstdAvailable, zstdExpected);
+  });
+
+  if (zstdAvailable) {
+    const zstdFrame = (...bytes) => Buffer.from([0x28, 0xb5, 0x2f, 0xfd, ...bytes]);
+    const valid = () => zlib.zstdCompressSync('{"a":3}', { params: { [zlib.constants.ZSTD_c_checksumFlag]: 1 } });
+    const wrongChecksum = () => {
+      const body = Buffer.from(valid());
+      body[body.length - 1] ^= 0xff;
+      return body;
+    };
+    const corruptBodies = [
+      ['text that is not zstd', () => Buffer.from('not compressed at all')],
+      ['a reserved frame bit set', () => zstdFrame(0x08, 0x00, 0x01, 0x00, 0x00)],
+      ['a window too large to decode', () => zstdFrame(0x00, 0xff, 0x01, 0x00, 0x00)],
+      ['a corrupt block', () => zstdFrame(0x20, 0x00, 0x07, 0x00, 0x00)],
+      ['a dictionary this server does not have', () => zstdFrame(0x01, 0x00, 0x07, 0x01, 0x00, 0x00)],
+      ['a wrong checksum', wrongChecksum],
+    ];
+
+    for (const [name, body] of corruptBodies) {
+      it(`without the app's refusal, a zstd body with ${name} is 400 INVALID_BODY_ENCODING`, async () => {
+        assertSafe(await post({ 'Content-Encoding': 'zstd' }, body()), 400, 'INVALID_BODY_ENCODING');
+      });
+    }
+
+    it('without the app\'s refusal, the parser decodes a valid zstd body', async () => {
+      const res = await post({ 'Content-Encoding': 'zstd' }, valid());
+      assert.equal(res.status, 200);
+      assert.deepEqual(res.body.body, { a: 3 });
+    });
+  } else {
+    it(`without the app's refusal, zstd cannot be decompressed on Node ${process.versions.node}, so it is 415 UNSUPPORTED_ENCODING`, async () => {
+      assertSafe(await post({ 'Content-Encoding': 'zstd' }, 'not compressed at all'), 415, 'UNSUPPORTED_ENCODING', 'zstd');
+    });
+  }
+
+  describe('zstd request bodies on the real app', () => {
+    // Fixed bytes, so these do not need a runtime that can compress zstd: the frame for {"a":3}.
+    const wholeFrame = Buffer.from('28b52ffd24073900007b2261223a337daa5053fc', 'hex');
+    const toLogin = (headers, body) => post(headers, body, { target: realApp, path: '/api/auth/login' });
+
+    const refused = [
+      ['a whole frame', wholeFrame],
+      ['a frame cut off with no output', wholeFrame.subarray(0, 6)],
+      ['a frame cut off in its content', wholeFrame.subarray(0, 12)],
+      ['a frame with its checksum cut off', wholeFrame.subarray(0, 16)],
+      ['text that is not zstd', Buffer.from('not compressed at all')],
+    ];
+    for (const [name, body] of refused) {
+      it(`${name} is 415 UNSUPPORTED_ENCODING`, async () => {
+        const res = await toLogin({ 'Content-Encoding': 'zstd' }, body);
+        assertSafe(res, 415, 'UNSUPPORTED_ENCODING', 'zstd');
+        assert.equal(res.body.error.message, 'Request body uses an unsupported content encoding');
+      });
+    }
+
+    for (const header of ['ZSTD', 'Zstd', '  zstd  ', 'gzip, zstd', 'zstd,gzip', 'gzip , ZSTD ']) {
+      it(`Content-Encoding "${header}" is 415 UNSUPPORTED_ENCODING`, async () => {
+        assertSafe(await toLogin({ 'Content-Encoding': header }, wholeFrame), 415, 'UNSUPPORTED_ENCODING', 'zstd');
+      });
+    }
+
+    // The parser skips these, so only the refusal can answer: a list in JSON would get 415 either way.
+    for (const header of ['zstd', 'gzip , ZSTD ']) {
+      it(`a body that is not JSON, with Content-Encoding "${header}", is refused too`, async () => {
+        const res = await toLogin({ 'Content-Type': 'text/plain', 'Content-Encoding': header }, wholeFrame);
+        assertSafe(res, 415, 'UNSUPPORTED_ENCODING', 'zstd');
+      });
+    }
+
+    it('the refusal keeps the security headers', async () => {
+      const res = await toLogin({ 'Content-Encoding': 'zstd' }, wholeFrame);
+      assert.equal(res.headers['x-content-type-options'], 'nosniff');
+    });
+
+    it('the refusal runs before the JSON parser', () => {
+      const names = realApp.router.stack.map((layer) => layer.name);
+      assert.ok(names.includes('jsonParser'));
+      assert.ok(names.indexOf('rejectZstdBodies') !== -1);
+      assert.ok(names.indexOf('rejectZstdBodies') < names.indexOf('jsonParser'));
+    });
+
+    if (zstdAvailable) {
+      it('a refused body never reaches the zstd decoder', async (t) => {
+        const decoder = t.mock.method(zlib, 'createZstdDecompress');
+        await toLogin({ 'Content-Encoding': 'zstd' }, wholeFrame);
+        assert.equal(decoder.mock.callCount(), 0);
+
+        // The spy does see the parser's use of it, so the count above means something.
+        await post({ 'Content-Encoding': 'zstd' }, wholeFrame);
+        assert.equal(decoder.mock.callCount(), 1);
+      });
+    }
+
+    // Only the email is sent: an answer about the password shows the body was decoded and read.
+    const onlyEmail = '{"email":"someone@example.com"}';
+    const others = [
+      ['gzip', gzipSync(onlyEmail)],
+      ['GZIP', gzipSync(onlyEmail)],
+      ['deflate', deflateSync(onlyEmail)],
+      ['br', brotliCompressSync(onlyEmail)],
+    ];
+    for (const [encoding, body] of others) {
+      it(`a valid ${encoding} body is still decoded and reaches the route`, async () => {
+        const res = await toLogin({ 'Content-Encoding': encoding }, body);
+        assert.equal(res.status, 400);
+        assert.equal(res.body.error.code, 'VALIDATION_ERROR');
+        assert.match(res.body.error.message, /password/i);
+      });
+    }
+
+    it('a corrupt gzip body is still 400 INVALID_BODY_ENCODING', async () => {
+      assertSafe(await toLogin({ 'Content-Encoding': 'gzip' }, 'not compressed at all'), 400, 'INVALID_BODY_ENCODING');
+    });
+  });
+
+  it('bad URL encoding in a route parameter is 400 INVALID_URL', async () => {
+    assertSafe(await request(paramApp).get('/item/%E0%A4%A'), 400, 'INVALID_URL', '%E0%A4%A');
+  });
+
+  it('still accepts valid bodies: UTF-8 and gzip', async () => {
+    const utf8 = await post({ 'Content-Type': 'application/json; charset=utf-8' }, '{"a":1}');
+    assert.equal(utf8.status, 200);
+    assert.deepEqual(utf8.body.body, { a: 1 });
+
+    const gzip = await post({ 'Content-Encoding': 'gzip' }, gzipSync('{"a":2}'));
+    assert.equal(gzip.status, 200);
+    assert.deepEqual(gzip.body.body, { a: 2 });
+  });
+
+  it('applies to the real app, which still sets its security headers', async () => {
+    const res = await request(realApp).post('/api/auth/login').set('Content-Type', 'application/json; charset=koi8-r').send('{}');
+    assertSafe(res, 415, 'UNSUPPORTED_CHARSET', 'koi8-r');
+    assert.equal(res.headers['x-content-type-options'], 'nosniff');
+  });
+
+  it('bad URL encoding on a real ticket route is 400 INVALID_URL', async () => {
+    assertSafe(await request(realApp).get('/api/tickets/%E0%A4%A'), 400, 'INVALID_URL', '%E0%A4%A');
+  });
+});
+
+describe('errors that only look like parser errors stay 500', () => {
+  const lookalikes = [
+    ['an application SyntaxError', () => new SyntaxError('secret internal detail')],
+    ['JSON.parse failing in application code', () => { try { JSON.parse('{secret internal detail'); } catch (err) { return err; } }],
+    ['a SyntaxError with status 400 but no parser type', () => Object.assign(new SyntaxError('secret internal detail'), { status: 400 })],
+    ['an application URIError', () => { try { decodeURIComponent('%E0%A4%A'); } catch (err) { return Object.assign(err, { message: 'secret internal detail' }); } }],
+    ['a zlib error from application code', () => Object.assign(new Error('secret internal detail'), { code: 'Z_DATA_ERROR' })],
+    ['a zstd error from application code', () => Object.assign(new Error('secret internal detail'), { code: 'ZSTD_error_prefix_unknown' })],
+    ['zlib out of memory', () => Object.assign(new Error('secret internal detail'), { status: 400, code: 'Z_MEM_ERROR' })],
+    ['Brotli out of memory', () => Object.assign(new Error('secret internal detail'), { status: 400, code: 'ERR__ERROR_ALLOC_CONTEXT_MODES' })],
+    ['zstd out of memory', () => Object.assign(new Error('secret internal detail'), { status: 400, code: 'ZSTD_error_memory_allocation' })],
+    ['a code that only begins like a listed one', () => Object.assign(new Error('secret internal detail'), { status: 400, code: 'Z_DATA_ERROR_OTHER' })],
+    ['status 400 alone', () => Object.assign(new Error('secret internal detail'), { status: 400 })],
+    ['a status 400 parser error that is not mapped', () => Object.assign(new Error('secret internal detail'), { status: 400, type: 'request.aborted' })],
+  ];
+
+  for (const [name, create] of lookalikes) {
+    it(name, async (t) => {
+      t.mock.method(console, 'error', () => {});
+      const res = await request(appWithRoute(() => { throw create(); })).get('/test');
+
+      assert.equal(res.status, 500);
+      assert.deepEqual(res.body, { error: { code: 'INTERNAL_ERROR', message: 'Something went wrong' } });
+      assert.equal(console.error.mock.callCount(), 1, 'logged on the server');
+    });
+  }
+
+  it('a thrown rate-limit ApiError keeps its status and message', async () => {
+    const res = await request(appWithRoute(() => {
+      throw new ApiError(429, 'RATE_LIMITED', 'Too many attempts');
+    })).get('/test');
+
+    assert.equal(res.status, 429);
+    assert.deepEqual(res.body, { error: { code: 'RATE_LIMITED', message: 'Too many attempts' } });
   });
 });

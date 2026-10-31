@@ -6,6 +6,7 @@ import agentTicketRoutes from './routes/agentTicket.routes.js';
 import adminStatsRoutes from './routes/adminStats.routes.js';
 import { methodNotAllowed, notFound, errorHandler } from './middleware/errorHandler.js';
 import { requestLogger } from './middleware/requestLog.js';
+import { ApiError } from './utils/ApiError.js';
 import customerTicketRoutes from "./routes/customerTicket.routes.js";
 import authRoutes from './routes/auth.routes.js';
 import categoryRoutes from './routes/category.routes.js';
@@ -31,6 +32,16 @@ export function securityHeaders({ hsts = false } = {}) {
   };
 }
 
+// zstd request bodies are refused before the parser sees them: some Node.js versions, including
+// 22.23.4, accept a cut-off zstd body with no error, so it could not be told apart from a whole one.
+export function rejectZstdBodies(req, res, next) {
+  const encodings = (req.headers['content-encoding'] ?? '').split(',');
+  if (encodings.some((encoding) => encoding.trim().toLowerCase() === 'zstd')) {
+    return next(new ApiError(415, 'UNSUPPORTED_ENCODING', 'Request body uses an unsupported content encoding'));
+  }
+  next();
+}
+
 const app = express();
 // Don't advertise the server framework in every response.
 app.disable('x-powered-by');
@@ -39,6 +50,7 @@ app.use(securityHeaders({ hsts: env.nodeEnv === 'production' }));
 // One origin: answered as before (that origin on every response). Several (CORS_ORIGINS): only a
 // listed request Origin is echoed back; any other gets no Access-Control-Allow-Origin.
 app.use(cors({ origin: env.corsOrigins.length > 1 ? env.corsOrigins : env.clientUrl }));
+app.use(rejectZstdBodies);
 app.use(express.json({ limit: '100kb' }));
 if (env.nodeEnv !== 'test') {
   app.use(requestLogger(env.nodeEnv));

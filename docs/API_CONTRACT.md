@@ -1,6 +1,6 @@
 # Help Desk API Contract
 
-> **Status: v0.12. Every endpoint below is implemented.** Points still waiting for a team decision are listed in [Section 1](#1-decisions).
+> **Status: v0.13. Every endpoint below is implemented.** Points still waiting for a team decision are listed in [Section 1](#1-decisions).
 > This document is the agreement the backend and frontend build against. Change it through a pull request so everyone sees the change.
 
 Source: project brief *Help Desk — Customer Support Ticket System* v0.2 (Sections 2, 4, 5 and 8). Where the brief leaves a choice open, this document says so.
@@ -37,8 +37,8 @@ States used below:
 | --- | --- | --- |
 | OPEN-1 | Agent access policy | **DECIDED** (2026-10-25): option (b), unassigned tickets + tickets assigned to that agent |
 | OPEN-2 | How the auth token is sent | **DECIDED** (2026-10-24): JWT Bearer token in the `Authorization` header |
-| C-1, C-4, C-5, C-8 | Replies on resolved tickets, category storage, eligible assignees, assignment permissions | **DEFAULT** (2026-10-25), see [Engineering defaults](#engineering-defaults-d1d7) |
-| D-4, D-5, D-7 | Comment model, shared ticket-access helper, owner of `GET /api/tickets/:id` | **DEFAULT** (2026-10-25), see [Engineering defaults](#engineering-defaults-d1d7) |
+| C-1, C-4, C-5, C-8 | Replies on resolved tickets, category storage, eligible assignees, assignment permissions | **DEFAULT** (2026-10-25), see [Engineering defaults](#engineering-defaults-d-1-to-d-11) |
+| D-4, D-5, D-7 | Comment model, shared ticket-access helper, owner of `GET /api/tickets/:id` | **DEFAULT** (2026-10-25), see [Engineering defaults](#engineering-defaults-d-1-to-d-11) |
 | C-2 | Admin modifying self | **DEFAULT** (2026-10-29), see D-8 |
 | C-3, C-6, C-7 | Token lifetime, token storage, logout | **OPEN**. The proposals are what currently runs (1-day tokens, `sessionStorage`, no server-side logout) so the app works; confirming or changing them is still a team decision. |
 
@@ -82,9 +82,11 @@ Option (B), an httpOnly cookie, was not chosen.
 | C-7 | Logout: does the client just discard the token, or does the server also need a logout/revocation endpoint? | OPEN | Client discards the token; no server endpoint. |
 | C-8 | Under OPEN-1, may an agent assign a ticket to a *different* agent, or only to themselves? | **DEFAULT** (D-1) | Only to themselves (claim) or to nobody (release). Admins assign anyone eligible. |
 
-### Engineering defaults (D1–D7)
+<a id="engineering-defaults-d1d7"></a>
 
-**State: DEFAULT (2026-10-25), chosen by Tirth Vaghela (integration lead). Not yet approved by the owners named below.** Each is implemented and covered by tests; the owner confirms or changes it when reviewing the implementing pull request.
+### Engineering defaults (D-1 to D-11)
+
+**State: DEFAULT, chosen by Tirth Vaghela (integration lead): D-1 to D-7 on 2026-10-25, D-8 to D-11 on 2026-10-29. Not yet approved by the owners named below.** Each is implemented and covered by tests; the owner confirms or changes it when reviewing the implementing pull request.
 
 | # | Topic | Default | Rationale | Owner to confirm |
 | --- | --- | --- | --- | --- |
@@ -92,16 +94,15 @@ Option (B), an httpOnly cookie, was not chosen.
 | D-2 | Eligible assignees (C-5) | The assignee must be an **existing** user with role `agent` or `admin` and `isActive: true`. Otherwise → **400 `VALIDATION_ERROR`** ("assignedTo must be an active agent or admin"), including for an id that matches no user (the 404 is reserved for the ticket in the URL). | Same as the existing C-5 proposal and the error already listed for `PATCH /assign`. Customers cannot work tickets; deactivated users cannot act. | Ayushi |
 | D-3 | Replies on resolved tickets (C-1) | **Allowed**, with no restriction. Posting a reply never changes the status, and a resolved ticket cannot be reopened (status only moves forward). | Keeps the existing C-1 proposal. Lets a customer confirm the fix or add details without creating a new ticket; reopening stays out of scope because the brief defines only Open → In Progress → Resolved. | Ayushi |
 | D-4 | Comment model (Q-2) | Model **`TicketComment`** (handbook collection name). JSON shape and keys stay `comment` / `comments` as in [Section 9](#9-comments-ticket-conversation). Implemented by the agent-workflow module (`backend/src/models/TicketComment.js`). Schema in `docs/DATA_MODEL.md` §3.4. | The handbook names the collection; the API shape is unchanged. The comments API is in this module, so the model is too: one owner, no duplicate. | Ayushi, Swati |
-| D-5 | Shared ticket access | **One helper**, `backend/src/utils/ticketAccess.js`, owned by the agent-workflow module and used by **every** ticket and comment route, including Swati's. Customer: `createdBy` is the user. Agent: OPEN-1 (unassigned or assigned to them). Admin: all. Any other role: no access. Single-ticket checks run in the contract's order: 400 `INVALID_ID`, then 404, then 403. List and update queries use the same rule as a database filter. | One rule in one file means lists, details, updates and comments cannot disagree. The agent rule is this module's decision (OPEN-1). | Swati, Ayushi |
+| D-5 | Shared ticket access | **One helper**, `backend/src/utils/ticketAccess.js`, owned by **Swatismita** (ticket ownership and access checks). **Every** route that reads or changes an existing ticket or its comments uses it, including the agent-workflow routes. Customer: `createdBy` is the user. Agent: OPEN-1 (unassigned or assigned to them). Admin: all. Any other role: no access. Single-ticket checks run in the contract's order: 400 `INVALID_ID`, then 404, then 403. List and update queries use the same rule as a database filter. | One rule in one file means lists, details, updates and comments cannot disagree. The helper applies the agent rule Ayushi confirmed (OPEN-1). | Swatismita, Ayushi |
 | D-6 | Category storage (C-4, Q-1) | **Database collection** `Category` `{ name, isActive }` with a case-insensitive unique name. Tickets reference it. Inactive categories stay on existing tickets, still appear in ticket details and statistics, and can still be used as a queue filter. They cannot be chosen for **new** tickets (enforced by ticket creation). | The handbook requires admins to manage categories; a fixed list would need a code change for every new category. References keep statistics and filters consistent. | Swati |
-| D-7 | Owner of `GET /api/tickets/:id` | The **agent-workflow module** owns it (`backend/src/routes/agentTicket.routes.js`). It is the one detail route for customers, agents and admins, authorized by `ticketAccess.js` (D-5). Swati's ticket router keeps `POST /api/tickets` and `GET /api/tickets/my` and **must not** register `GET /:id`. | The route is pure access control plus a read, and access control lives in this module (D-5). One owner prevents two competing registrations. | Swati, Ayushi |
-
+| D-7 | Owner of `GET /api/tickets/:id` | **Ayushi's agent-workflow router** registers it (`backend/src/routes/agentTicket.routes.js`). It is the one detail route for customers, agents and admins, authorized by `ticketAccess.js` (D-5, Swatismita). Swatismita's ticket router keeps `POST /api/tickets` and `GET /api/tickets/my` and **must not** register `GET /:id`. | One owner prevents two competing registrations. The route only reads the ticket after the shared access check (D-5), so the route and the access rule each keep one owner. | Swatismita, Ayushi |
 | D-8 | Admin modifying self (C-2) | `PATCH /api/admin/users/:id/role` and `/status` on **your own** account → **400 `CANNOT_MODIFY_SELF`**. Admins may change other admins. | The C-2 proposal. Refusing self-changes alone does not keep an admin (two admins can demote each other at the same moment), so a change that would leave no active admin is also refused: **409 `LAST_ACTIVE_ADMIN`**. | Swati |
 | D-9 | Additions made while integrating the dashboards (2026-10-29) | All **additive**; no existing field, route or status changed. **(a)** `PATCH /api/auth/me` updates the caller's own `name` (§6). **(b)** Category has an optional `description` (0–200 chars). **(c)** `GET /api/admin/users` items include `ticketCount`. **(d)** `GET /api/admin/stats` adds `byPriority`, `unresolvedByPriority`, `unassigned`, `byAssignee` and an optional `from` date (§11). **(e)** `POST /api/tickets` also accepts the older field name `category` for `categoryId`, and `priority` defaults to `medium` when omitted. **(f)** `GET /api/tickets/my` also accepts the queue's `priority`, `category` and `q` filters. **(g)** Sign-in and sign-up are rate limited per client IP (`429 RATE_LIMITED`, configurable, see README). | The existing admin screens showed category descriptions, per-user ticket counts, per-priority and per-agent figures and report periods; serving them from the API avoids dozens of list requests. (e) keeps clients written before §7 was aligned working. | Swati, Ayushi |
 | D-10 | Ticket ownership (2026-10-29, QA D-4/D-5) | An **in-progress or resolved ticket always has an assignee**, and a **resolved ticket is final**. `PATCH /status`: a resolved ticket → **400 `TICKET_RESOLVED`**; otherwise the forward-only rule (`INVALID_STATUS_TRANSITION`); then an unassigned ticket → **400 `ASSIGNEE_REQUIRED`** (start or resolve). Only the assignee or an admin can move an assigned ticket (agents cannot reach other agents' tickets, OPEN-1); an admin resolving keeps the assignee, and `statusHistory` records the admin. `PATCH /assign`: a resolved ticket → **400 `TICKET_RESOLVED`** for any `assignedTo` or `priority` change; `assignedTo: null` on an in-progress ticket → **400 `ASSIGNEE_REQUIRED`** (reassign instead). Admins reassign open and in-progress tickets (D-2). These checks run after validation, `INVALID_ID`, 404, 403 and the D-1/D-2 checks, and again inside the atomic update, so a race gives 409 (or the rule's 400), never an ownerless ticket. Existing tickets that break the rule stay readable and are not changed automatically; an admin repairs them by assigning. When someone else releases or reassigns a ticket, the former assignee gets a `ticket_unassigned` notification (§12a). An assignment history is deferred (phase 2). | Stops tickets being worked or resolved with no owner, and orphaned in-progress tickets. Matches the brief's flow: assign, then start work. | Tirth Vaghela; pending review by Ayushi |
 | D-11 | Who may reply (2026-10-29) | `POST /api/tickets/:id/comments`: the **customer who owns** the ticket, the **agent it is assigned to**, and **any admin**. Agents can still **read** unassigned tickets and their comments (OPEN-1) but must claim a ticket before replying → otherwise **403 `FORBIDDEN`** ("Assign this ticket to yourself to reply"). Replies on resolved tickets stay allowed (D-3). | Makes the API match the agent Inbox, which only offers replies on your own tickets; one accountable voice per ticket. | Tirth Vaghela; pending review by Ayushi |
 
-**Router mounting (with D-7):** both ticket routers are mounted at `/api/tickets` in `backend/src/app.js`, **Swati's first**, so that `GET /my` is matched before the agent-workflow router's `GET /:id` (otherwise `my` would be read as an id and return 400 `INVALID_ID`). Admin routes: Swati's `/api/admin/users` and `/api/admin/categories` routers, and the agent-workflow `/api/admin/stats` router, mounted at `/api/admin` with no overlapping paths.
+**Router mounting (with D-7):** both ticket routers are mounted at `/api/tickets` in `backend/src/app.js`, **Swatismita's first**, so that `GET /my` is matched before the agent-workflow router's `GET /:id` (otherwise `my` would be read as an id and return 400 `INVALID_ID`). Admin routes: the `/api/admin/users` and `/api/admin/categories` routers, and the router mounted at `/api/admin` that serves `/stats` and `/analytics`, with no overlapping paths. §4 lists the owner of each route.
 
 ---
 
@@ -115,7 +116,7 @@ Option (B), an httpOnly cookie, was not chosen.
 
 ### Requests
 
-- JSON bodies with `Content-Type: application/json`. Maximum body size: 100 kB.
+- JSON bodies with `Content-Type: application/json`. Maximum body size: 100 kB, measured after decompression. See [Malformed requests](#malformed-requests) for what is refused.
 - Protected routes require the header `Authorization: Bearer <token>` (decided, see OPEN-2).
 - **Unknown fields in request bodies are ignored.** In particular, the server never accepts `role`, `status`, `ticketNumber`, `createdBy`, `isActive` or timestamps from a client except through the endpoints documented for them.
 - String inputs are trimmed before validation.
@@ -131,7 +132,7 @@ Option (B), an httpOnly cookie, was not chosen.
 
 ### Errors (implemented)
 
-Every error uses one envelope. This is already implemented in `backend/src/middleware/errorHandler.js`.
+Every error uses one envelope. This is already implemented in `backend/src/middleware/errorHandler.js`. The one 4xx or 5xx answer outside it is `GET /api/health` with the database disconnected, which returns its normal health body (§5).
 
 ```json
 { "error": { "code": "VALIDATION_ERROR", "message": "Subject is required" } }
@@ -139,17 +140,41 @@ Every error uses one envelope. This is already implemented in `backend/src/middl
 
 | Status | Meaning |
 | --- | --- |
-| 400 | Invalid input (missing field, bad value, invalid ID, invalid status transition) |
+| 400 | Invalid input (missing field, bad value, invalid ID, invalid status transition), or a malformed body or URL (see [Malformed requests](#malformed-requests)) |
 | 401 | Not logged in, or token missing/invalid/expired |
 | 403 | Logged in, but not allowed (wrong role, not the owner, outside access policy, account deactivated) |
 | 404 | Resource or route does not exist |
+| 405 | `METHOD_NOT_ALLOWED`: the path exists, but not for this method. The `Allow` header lists the supported methods. A path that does not exist gets 404. |
 | 409 | Duplicate (e.g. email already registered) |
 | 413 | Request body too large |
+| 415 | The request body uses a character set or content encoding the server does not support (see [Malformed requests](#malformed-requests)) |
+| 429 | `RATE_LIMITED`: too many requests from one client IP in the current window, with a `Retry-After` header (seconds). Applies to `POST` on `/api/auth/register`, `/login`, `/me/password`, `/me/email`, `/verify-email`, `/forgot-password`, `/reset-password/check` and `/reset-password` (§6, §6a). |
 | 500 | Unexpected server error. Message is always generic; details are only logged on the server. |
+| 503 | `EMAIL_DELIVERY_FAILED`: the confirmation email for `POST /api/auth/me/email` could not be sent, so nothing stays pending (§6a). `GET /api/health` also returns 503 when MongoDB is disconnected, with its health body rather than an error envelope (§5). |
 
 **`message` is safe to show to users. Frontend logic should branch on `status` and `code`, never on the message text.**
 
 Backend helpers (implemented): `ApiError.badRequest()`, `.unauthorized()`, `.forbidden()`, `.notFound()`, `.conflict()` in `backend/src/utils/ApiError.js`, and `requireString`, `requireOneOf`, `requireEmail` in `backend/src/utils/validate.js`. Mongoose validation errors, invalid ObjectIds and duplicate-key errors are converted to 400 / 400 / 409 automatically.
+
+### Malformed requests
+
+A request the server cannot read gets one of these answers, in the usual envelope. Each `message` is fixed, and repeats nothing from the request or the parser.
+
+| Status | Code | Message | When |
+| --- | --- | --- | --- |
+| 400 | `INVALID_JSON` | `Request body is not valid JSON` | The body is not valid JSON |
+| 400 | `INVALID_BODY_ENCODING` | `Request body could not be decoded` | A gzip, deflate or Brotli body is corrupt or cut off, or needs a dictionary the server does not have |
+| 400 | `INVALID_URL` | `Request URL is not correctly encoded` | A route parameter has bad percent-encoding, such as `/api/tickets/%E0%A4%A` |
+| 413 | `PAYLOAD_TOO_LARGE` | `Request body is too large` | The body is over 100 kB, including a compressed body that expands past it |
+| 415 | `UNSUPPORTED_CHARSET` | `Request body uses an unsupported character set` | The `Content-Type` charset is not supported, such as `koi8-r` or `utf-99` |
+| 415 | `UNSUPPORTED_ENCODING` | `Request body uses an unsupported content encoding` | The `Content-Encoding` is not supported, including zstd |
+
+- **Only JSON requests are read this way.** The body checks apply when `Content-Type` is `application/json`. A route that needs a body gives 400 `VALIDATION_ERROR` when it has none (§6, §7).
+- **zstd request bodies are not supported.** `Content-Encoding: zstd`, in any letter case and alone or in a list, gives 415 `UNSUPPORTED_ENCODING` before the body is read, whatever the body or its `Content-Type`.
+- **Body errors come before everything in the next section.** The body is read before any route runs, so these answers do not depend on the token.
+- **`INVALID_URL` can come before authentication.** `GET /api/tickets/%E0%A4%A` with no token gives 400, not 401. A parameter that is correctly encoded but is not an ObjectId gives 400 `INVALID_ID` as usual.
+- **Other bad URLs are not `INVALID_URL`.** Bad encoding outside a route parameter does not reach this check: a path that matches no route gives 404, and a bad query string is not refused.
+- **A fault on the server stays 500.** Running out of memory while decompressing, for example, gives 500 `INTERNAL_ERROR`, as does any decompression failure not listed in the code.
 
 ### Order of checks on protected routes
 
@@ -246,9 +271,9 @@ In **list** responses, tickets omit `description` and `statusHistory` to keep pa
 
 ## 4. Endpoint summary
 
-"Agent\*" means: agents only for tickets that are unassigned or assigned to them (OPEN-1, decided). Owners are the customer who created the ticket.
+"Agent\*" means: agents only for tickets that are unassigned or assigned to them (OPEN-1, decided). In the Allowed column, "Owner" is the customer who created the ticket. The Team owner column names the responsible team member.
 
-| Method | Route | Allowed | Owner (proposed) | Status |
+| Method | Route | Allowed | Team owner | Status |
 | --- | --- | --- | --- | --- |
 | GET | `/api/health` | Public | Tirth | **Implemented** |
 | POST | `/api/auth/register` | Public | Swatismita | **Implemented** |
@@ -265,22 +290,32 @@ In **list** responses, tickets omit `description` and `statusHistory` to keep pa
 | POST | `/api/tickets` | Customer | Swatismita | **Implemented** |
 | GET | `/api/tickets/my` | Customer | Swatismita | **Implemented** |
 | GET | `/api/tickets` | Agent\*, Admin | Ayushi | **Implemented** |
-| GET | `/api/tickets/:id` | Owner, Agent\*, Admin | Ayushi (D-7, DEFAULT) | **Implemented** |
+| GET | `/api/tickets/:id` | Owner, Agent\*, Admin | Ayushi (route, D-7); Swatismita (access check, D-5) | **Implemented** |
 | PATCH | `/api/tickets/:id/assign` | Agent\*, Admin | Ayushi | **Implemented** |
 | PATCH | `/api/tickets/:id/status` | Agent\*, Admin | Ayushi | **Implemented** |
 | GET | `/api/tickets/:id/comments` | Owner, Agent\*, Admin | Ayushi | **Implemented** |
 | POST | `/api/tickets/:id/comments` | Owner, Agent\*, Admin | Ayushi | **Implemented** |
 | GET | `/api/categories` | Logged in | Swatismita | **Implemented** |
-| GET | `/api/admin/categories` | Admin | Swatismita | **Implemented** |
-| POST | `/api/admin/categories` | Admin | Swatismita | **Implemented** |
-| PATCH | `/api/admin/categories/:id` | Admin | Swatismita | **Implemented** |
-| GET | `/api/admin/users` | Admin | Swatismita | **Implemented** |
-| PATCH | `/api/admin/users/:id/role` | Admin | Swatismita | **Implemented** |
-| PATCH | `/api/admin/users/:id/status` | Admin | Swatismita | **Implemented** |
+| GET | `/api/admin/categories` | Admin | Tirth | **Implemented** |
+| POST | `/api/admin/categories` | Admin | Tirth | **Implemented** |
+| PATCH | `/api/admin/categories/:id` | Admin | Tirth | **Implemented** |
+| GET | `/api/admin/users` | Admin | Tirth | **Implemented** |
+| PATCH | `/api/admin/users/:id/role` | Admin | Tirth | **Implemented** |
+| PATCH | `/api/admin/users/:id/status` | Admin | Tirth | **Implemented** |
 | GET | `/api/admin/stats` | Admin | Ayushi | **Implemented** |
-| GET | `/api/admin/analytics` | Admin | Tirth Vaghela | **Implemented** |
+| GET | `/api/admin/analytics` | Admin | Tirth | **Implemented** |
 
-Owners follow the team allocation and can be reassigned by agreement. `GET /api/admin/categories` is an addition to the brief so admins can see inactive categories.
+Owners follow the team allocation below and can be reassigned by agreement. `GET /api/admin/categories` is an addition to the brief so admins can see inactive categories.
+
+| Team | Member | Responsibilities |
+| --- | --- | --- |
+| Backend | **Tirth Vaghela**, Backend Integration, Admin Backend & DevOps | Backend architecture and API integration; admin backend APIs, dashboard data and management operations; shared database and API coordination; backend-to-frontend API integration across customer, agent and admin modules; integration testing, deployment coordination and README/documentation |
+| Backend | **Ayushi Rathi**, Agent Workflow & Conversations | Agent ticket queue, search and filters; ticket assignment and status transitions; replies and conversation management; ticket status history and admin ticket summaries |
+| Backend | **Swatismita**, Tickets & Authentication | User authentication, JWT and role-based middleware; User, Ticket and Category models; ticket creation and customer ticket history; ticket ownership and access checks |
+| Frontend | **Mimansa Narendra Patle**, Customer Frontend & Landing Page | Project landing page; signup, login and customer dashboard; create-ticket form, ticket history and ticket details; loading, validation and error states |
+| Frontend | **Shwetaleena Kundu**, Agent/Admin Frontend | Agent dashboard, filters and replies; ticket assignment and status updates; admin user and category management screens |
+
+The frontend team builds its screens against these endpoints and owns no backend route.
 
 ---
 
@@ -306,7 +341,22 @@ Public. Used by the frontend status check and by the deployment host.
 
 ## 6. Authentication
 
-> **Transport decided (OPEN-2):** the JWT is returned as `token` in the response body and sent back as `Authorization: Bearer <token>`. The endpoints below are still **proposed, not implemented**, and token lifetime, storage and logout remain open (C-3, C-6, C-7).
+> **Implemented.** All routes below are mounted at `/api/auth`. **Transport decided (OPEN-2):** the JWT is returned as `token` in the response body and sent back as `Authorization: Bearer <token>`. Token lifetime, storage and logout remain team decisions (C-3, C-6, C-7); what currently runs is recorded there.
+
+| Method | Route | Access | Success | Details |
+| --- | --- | --- | --- | --- |
+| POST | `/api/auth/register` | Public | **201** `{ user, token }` | Below |
+| POST | `/api/auth/login` | Public | **200** `{ user, token }` | Below |
+| GET | `/api/auth/me` | Logged in | **200** `{ user }` | Below |
+| PATCH | `/api/auth/me` | Logged in | **200** `{ user }` | Below |
+| POST | `/api/auth/me/password` | Logged in | **200** `{ user, token }` | §6a |
+| GET | `/api/auth/me/email` | Logged in | **200** `{ pendingEmail, expiresAt }` | §6a |
+| POST | `/api/auth/me/email` | Logged in | **202** `{ pendingEmail, expiresAt }` | §6a |
+| DELETE | `/api/auth/me/email` | Logged in | **200** `{ pendingEmail: null, expiresAt: null }` | §6a |
+| POST | `/api/auth/verify-email` | Public | **200** `{ email }` | §6a |
+| POST | `/api/auth/forgot-password` | Public | **200** `{ message }` | §6a |
+| POST | `/api/auth/reset-password/check` | Public | **200** `{ valid: true, expiresAt }` | §6a |
+| POST | `/api/auth/reset-password` | Public | **200** `{ message }` | §6a |
 
 ### `POST /api/auth/register` — **Implemented**
 
@@ -369,7 +419,7 @@ Logged in (any role). The caller updates their own profile.
 
 Request: `{ "name": "Asha C. Customer" }` — required, 2–80 characters after trimming.
 
-Only `name` can be changed. `email`, `role`, `isActive`, `password` and any other field are ignored (§2): an email change needs verification and a password change needs its own flow with the current password, neither of which exists yet.
+Only `name` can be changed here. `email`, `role`, `isActive`, `password` and any other field are ignored (§2). Email and password changes have their own implemented flows, which require the current password: see [§6a](#6a-account-security--implemented-2026-10-29). Role and account status are changed by admins (§11).
 
 **200**: `{ "user": { …User } }`
 
@@ -818,6 +868,8 @@ Errors: **400** `VALIDATION_ERROR` / `INVALID_ID` · **401** · **404**.
 | --- | --- | --- | --- |
 | `VALIDATION_ERROR` | 400 | Missing or invalid input; Mongoose validation errors | **Yes** (helper + mapping) |
 | `INVALID_JSON` | 400 | Malformed JSON body | **Yes** |
+| `INVALID_BODY_ENCODING` | 400 | Corrupt or cut-off gzip, deflate or Brotli body (§2) | **Yes** |
+| `INVALID_URL` | 400 | Bad percent-encoding in a route parameter (§2) | **Yes** |
 | `INVALID_ID` | 400 | Path/body id is not a valid ObjectId | **Yes** (Mongoose CastError mapping) |
 | `INVALID_STATUS_TRANSITION` | 400 | Status change not allowed | **Yes** |
 | `ASSIGNEE_REQUIRED` | 400 | Starting or resolving an unassigned ticket, or releasing an in-progress one (D-10) | **Yes** |
@@ -839,7 +891,9 @@ Errors: **400** `VALIDATION_ERROR` / `INVALID_ID` · **401** · **404**.
 | `LAST_ACTIVE_ADMIN` | 409 | Role/status change would leave no active admin (§11) | **Yes** |
 | `INVALID_CURRENT_PASSWORD` | 400 | Wrong current password in a security change (§6a) | **Yes** |
 | `INVALID_OR_EXPIRED_TOKEN` | 400 | Reset or email-confirmation link unknown, expired or used (§6a) | **Yes** |
-| `PAYLOAD_TOO_LARGE` | 413 | Body over 100 kB | **Yes** |
+| `PAYLOAD_TOO_LARGE` | 413 | Body over 100 kB, measured after decompression | **Yes** |
+| `UNSUPPORTED_CHARSET` | 415 | Unsupported `Content-Type` charset (§2) | **Yes** |
+| `UNSUPPORTED_ENCODING` | 415 | Unsupported `Content-Encoding`, including zstd (§2) | **Yes** |
 | `EMAIL_DELIVERY_FAILED` | 503 | The confirmation email for an email change could not be sent (§6a) | **Yes** |
 | `RATE_LIMITED` | 429 | Too many sign-in or sign-up attempts from one client (D-9); sent with `Retry-After` | **Yes** |
 | `INTERNAL_ERROR` | 500 | Anything unexpected | **Yes** |
@@ -866,3 +920,5 @@ Modules should throw the specific code where one is listed (e.g. `ApiError.confl
 | 2026-10-30 | v0.12: `GET /api/admin/analytics` (§11), the figures of the Reports page: status, priority, category, resolution time, SLA and assignee figures for tickets created in an inclusive `from`..`to` range. Additive: `GET /api/admin/stats` is unchanged. | Tirth Vaghela |
 | 2026-10-30 | Documentation only, no API change: removed stray text from the title, replaced the out-of-date "proposal" status, listed §6a and §12a in the contents, recorded that `sessionStorage` is what runs for C-6, and corrected what a failed email logs. | Tirth Vaghela |
 | 2026-10-30 | Behaviour only, no request or response field changed: §6a links are cancelled after a password or email change (500 if that fails), and §8 failed emails log only the purpose and error codes. | Tirth Vaghela |
+| 2026-10-31 | Documentation only, no API change: §6 described as implemented, with its routes listed; §6 no longer says email and password changes do not exist; D-1 to D-11 joined in one table; 405, 429 and 503 added to the §2 status table; §4, D-5 and D-7 ownership follow the final team responsibilities. | Tirth Vaghela |
+| 2026-10-31 | v0.13: malformed requests (§2). New error codes `INVALID_BODY_ENCODING`, `INVALID_URL`, `UNSUPPORTED_CHARSET` and `UNSUPPORTED_ENCODING`, and status 415. These requests previously gave 500 `INTERNAL_ERROR`; existing fields and routes are unchanged. zstd request bodies are not supported and give 415. | Tirth Vaghela |
