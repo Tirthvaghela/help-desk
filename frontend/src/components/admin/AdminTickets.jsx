@@ -1,9 +1,21 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "../../auth/useAuth.js";
 import { useApiData } from "../../api/useApiData.js";
-import { assignTicket, getTicket, listQueue, ticketErrorMessage, ticketPermissions, updateTicketStatus } from "../../api/tickets.js";
+import {
+  addComment,
+  assignTicket,
+  getTicket,
+  listComments,
+  listQueue,
+  TICKET_LIMITS,
+  TICKET_PRIORITIES,
+  ticketErrorMessage,
+  ticketPermissions,
+  updateTicketStatus,
+} from "../../api/tickets.js";
 import { getStats, listAllCategories, listAssignableStaff } from "../../api/admin.js";
-import { capitalize, formatIsoDate, STATUS_LABELS } from "../staff/staffFormat.js";
+import { validateComment } from "../../pages/customer/validation.js";
+import { capitalize, formatDateTime, formatIsoDate, STATUS_LABELS } from "../staff/staffFormat.js";
 import { useDebouncedValue } from "../staff/useDebouncedValue.js";
 import StatusHistory from "../staff/StatusHistory.jsx";
 import SlaBadge from "../staff/SlaBadge.jsx";
@@ -98,8 +110,278 @@ function Badge({ value, type }) {
 }
 
 // ========================================
+// TICKET CONVERSATION
+// ========================================
+
+// Sends one reply. `inFlight` ({ current }) is set before the first await, so a second submit in
+// the same moment is ignored, before React has rendered the disabled button. Returns
+// { status: "ignored" | "invalid" | "sent" | "failed", ... }.
+export async function submitReply({ message, inFlight, send }) {
+  if (inFlight.current) return { status: "ignored" };
+  const invalid = validateComment(message);
+  if (invalid) return { status: "invalid", message: invalid };
+  inFlight.current = true;
+  try {
+    return { status: "sent", comment: await send(message.trim()) };
+  } catch (error) {
+    return { status: "failed", error };
+  } finally {
+    inFlight.current = false;
+  }
+}
+
+// The thread and reply form, from props only. Comments keep the API's order, oldest first (§9).
+export function ConversationView({
+  status,
+  comments,
+  error,
+  onRetry,
+  currentUserId,
+  ticketStatus,
+  reply,
+  onReplyChange,
+  onSubmit,
+  sending = false,
+  fieldError = null,
+  sendError = null,
+  sent = false,
+}) {
+  const loading = status === "loading";
+  const length = reply.trim().length;
+  // Not found and forbidden won't change by retrying; anything else might.
+  const permanent = error?.status === 403 || error?.status === 404 || error?.code === "INVALID_ID";
+
+  return (
+    <section className="mt-6" aria-labelledby="admin-conversation-heading">
+      <div className="flex items-center justify-between gap-3">
+        <h3 id="admin-conversation-heading" className="text-sm font-semibold text-emerald-950">
+          Conversation
+        </h3>
+
+        {comments && (
+          <button
+            type="button"
+            onClick={onRetry}
+            disabled={loading}
+            className="rounded-lg px-2 py-1 text-xs font-semibold text-emerald-700 hover:bg-white disabled:opacity-60"
+          >
+            {loading ? "Refreshing…" : "Refresh"}
+          </button>
+        )}
+      </div>
+
+      {loading && !comments && (
+        <p role="status" className="mt-3 rounded-2xl bg-white/70 p-4 text-sm text-slate-500">
+          Loading conversation…
+        </p>
+      )}
+
+      {status === "error" && (
+        <p role="alert" className="mt-3 rounded-2xl bg-red-50 p-4 text-sm text-red-700">
+          {ticketErrorMessage(error, "The conversation could not be loaded.")}{" "}
+          {!permanent && (
+            <button type="button" onClick={onRetry} className="font-semibold underline">Try again</button>
+          )}
+        </p>
+      )}
+
+      {comments?.length === 0 && (
+        <p className="mt-3 rounded-2xl bg-white/70 p-4 text-sm text-slate-500">
+          No replies yet.
+        </p>
+      )}
+
+      {comments?.length > 0 && (
+        <ol className="mt-3 space-y-3" aria-busy={loading}>
+          {comments.map((comment) => {
+            const mine = comment.author?.id === currentUserId;
+            return (
+              <li key={comment.id} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
+                <div className={`min-w-0 max-w-[90%] rounded-2xl px-4 py-3 ${mine ? "bg-emerald-100 text-emerald-950" : "bg-white/80 text-slate-700"}`}>
+                  <p className="text-xs font-semibold">
+                    {mine ? "You" : comment.author?.name ?? "Unknown user"}
+                    {comment.author?.role && (
+                      <span className="font-normal text-slate-500"> · {capitalize(comment.author.role)}</span>
+                    )}
+                  </p>
+                  <p className="mt-1 whitespace-pre-wrap break-words text-sm leading-6">{comment.message}</p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    <time dateTime={comment.createdAt}>{formatDateTime(comment.createdAt)}</time>
+                  </p>
+                </div>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+
+      <form onSubmit={onSubmit} noValidate className="mt-4">
+        {ticketStatus === "resolved" && (
+          <p className="mb-2 text-xs text-slate-500">
+            This ticket is resolved. You can still reply, but replying does not reopen it.
+          </p>
+        )}
+
+        <div className="mb-2 flex items-baseline justify-between gap-2">
+          <label htmlFor="admin-ticket-reply" className="text-xs font-semibold text-slate-600">
+            Your reply
+          </label>
+          <span className={`text-xs ${length > TICKET_LIMITS.comment.max ? "text-red-600" : "text-slate-500"}`}>
+            {length}/{TICKET_LIMITS.comment.max}
+          </span>
+        </div>
+
+        <textarea
+          id="admin-ticket-reply"
+          rows={3}
+          value={reply}
+          onChange={onReplyChange}
+          disabled={sending}
+          placeholder="Reply to the customer."
+          aria-invalid={Boolean(fieldError)}
+          aria-describedby={fieldError ? "admin-ticket-reply-error" : undefined}
+          style={{ ...inputStyle, resize: "vertical" }}
+        />
+
+        {fieldError && (
+          <p id="admin-ticket-reply-error" className="mt-1 text-xs text-red-600">{fieldError}</p>
+        )}
+
+        {sendError && (
+          <p role="alert" className="mt-2 rounded-xl bg-red-50 px-4 py-3 text-xs text-red-700">{sendError}</p>
+        )}
+
+        {sent && (
+          <p role="status" className="mt-2 rounded-xl bg-emerald-50 px-4 py-3 text-xs font-medium text-emerald-800">Reply sent.</p>
+        )}
+
+        <div className="mt-3 flex justify-end">
+          <button
+            type="submit"
+            disabled={sending}
+            aria-busy={sending}
+            className="rounded-xl bg-emerald-700 px-5 py-2.5 text-xs font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-70"
+          >
+            {sending ? "Sending…" : "Send reply"}
+          </button>
+        </div>
+      </form>
+    </section>
+  );
+}
+
+// Loads the ticket's comments and posts the admin's replies (contract §9, D-3, D-11).
+function TicketConversation({ ticket }) {
+  const { token, user, endSessionIfRejected } = useAuth();
+  const ticketId = ticket.id;
+  const loadComments = useCallback((authToken) => listComments(authToken, ticketId), [ticketId]);
+  const { status, data: comments, error, reload, setData } = useApiData(loadComments);
+
+  const [reply, setReply] = useState("");
+  const [sending, setSending] = useState(false);
+  const [fieldError, setFieldError] = useState(null);
+  const [sendError, setSendError] = useState(null);
+  const [sent, setSent] = useState(false);
+  const inFlight = useRef(false);
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    if (inFlight.current) return;
+    setFieldError(null);
+    setSendError(null);
+    setSent(false);
+    setSending(true);
+
+    const result = await submitReply({
+      message: reply,
+      inFlight,
+      send: (message) => addComment(token, ticketId, message),
+    });
+    setSending(false);
+
+    if (result.status === "invalid") {
+      setFieldError(result.message);
+    } else if (result.status === "failed") {
+      // The typed text stays, so nothing is lost when trying again.
+      if (!endSessionIfRejected(result.error)) {
+        setSendError(ticketErrorMessage(result.error, "Your reply could not be sent. Please try again."));
+      }
+    } else if (result.status === "sent") {
+      setReply("");
+      setSent(true);
+      setData((previous) => [...(previous ?? []), result.comment]);
+      reload();
+    }
+  };
+
+  return (
+    <ConversationView
+      status={status}
+      comments={comments}
+      error={error}
+      onRetry={reload}
+      currentUserId={user?.id}
+      ticketStatus={ticket.status}
+      reply={reply}
+      onReplyChange={(event) => {
+        setReply(event.target.value);
+        setSent(false);
+      }}
+      onSubmit={handleSubmit}
+      sending={sending}
+      fieldError={fieldError}
+      sendError={sendError}
+      sent={sent}
+    />
+  );
+}
+
+// ========================================
 // TICKET DETAILS MODAL
 // ========================================
+
+// Runs one change to the ticket. `inFlight` ({ current }) is set before the first await, so a second
+// change in the same moment is ignored, before React has rendered the disabled controls. Returns
+// { status: "ignored" | "saved" | "failed", ... }; `ticket` is the API's updated ticket.
+export async function saveTicketChange({ action, inFlight }) {
+  if (inFlight.current) return { status: "ignored" };
+  inFlight.current = true;
+  try {
+    return { status: "saved", ticket: await action() };
+  } catch (error) {
+    return { status: "failed", error };
+  } finally {
+    inFlight.current = false;
+  }
+}
+
+// The ticket's priority, as a selector. It follows `priority`, so a failed save shows the saved value.
+export function PriorityField({ priority, saving = false, disabled = false, resolved = false, onChange }) {
+  return (
+    <div>
+      <label htmlFor="admin-ticket-priority" className="text-xs text-slate-500">
+        Priority{saving && " · saving…"}
+      </label>
+
+      <select
+        id="admin-ticket-priority"
+        value={priority}
+        onChange={onChange}
+        disabled={disabled}
+        aria-busy={saving}
+        style={{ ...inputStyle, marginTop: "4px" }}
+      >
+        {TICKET_PRIORITIES.map((value) => (
+          <option key={value} value={value}>{capitalize(value)}</option>
+        ))}
+      </select>
+
+      {resolved && (
+        <p className="mt-1 text-xs text-slate-500">Priority cannot be changed after a ticket is resolved.</p>
+      )}
+    </div>
+  );
+}
 
 function TicketModal({ ticketId, staff, onClose, onChanged }) {
   const { token, user, endSessionIfRejected } = useAuth();
@@ -107,6 +389,8 @@ function TicketModal({ ticketId, staff, onClose, onChanged }) {
   const { data: ticket, status, error, reload, setData } = useApiData(loadTicket);
   const [busy, setBusy] = useState(null);
   const [actionError, setActionError] = useState(null);
+  const [savedNotice, setSavedNotice] = useState(null);
+  const inFlight = useRef(false);
 
   // Escape closes the dialog.
   useEffect(() => {
@@ -115,20 +399,20 @@ function TicketModal({ ticketId, staff, onClose, onChanged }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  async function save(kind, action) {
-    if (busy) return;
+  async function save(kind, action, savedMessage = null) {
+    if (inFlight.current) return;
     setBusy(kind);
     setActionError(null);
-    try {
-      const updated = await action();
-      setData(() => updated);
+    setSavedNotice(null);
+    const result = await saveTicketChange({ action, inFlight });
+    setBusy(null);
+
+    if (result.status === "saved") {
+      setData(() => result.ticket);
+      setSavedNotice(savedMessage);
       onChanged();
-    } catch (saveError) {
-      if (!endSessionIfRejected(saveError)) {
-        setActionError(ticketErrorMessage(saveError, "The change could not be saved. Please try again."));
-      }
-    } finally {
-      setBusy(null);
+    } else if (result.status === "failed" && !endSessionIfRejected(result.error)) {
+      setActionError(ticketErrorMessage(result.error, "The change could not be saved. Please try again."));
     }
   }
 
@@ -219,18 +503,19 @@ function TicketModal({ ticketId, staff, onClose, onChanged }) {
                 </p>
               </div>
 
-              <div>
-                <p className="text-xs text-slate-500">
-                  Priority
-                </p>
-
-                <div className="mt-1">
-                  <Badge
-                    value={capitalize(ticket.priority)}
-                    type="priority"
-                  />
-                </div>
-              </div>
+              {/* The response carries the new due date, so the SLA details below update with it. */}
+              <PriorityField
+                priority={ticket.priority}
+                saving={busy === "priority"}
+                disabled={Boolean(busy) || !permissions.canChangePriority}
+                resolved={ticket.status === "resolved"}
+                onChange={(event) => {
+                  const priority = event.target.value;
+                  if (priority !== ticket.priority) {
+                    save("priority", () => assignTicket(token, ticket.id, { priority }), "Priority updated.");
+                  }
+                }}
+              />
 
               <div>
                 <p className="text-xs text-slate-500">
@@ -331,7 +616,15 @@ function TicketModal({ ticketId, staff, onClose, onChanged }) {
               </p>
             )}
 
+            {savedNotice && (
+              <p role="status" className="mt-4 rounded-xl bg-emerald-50 px-4 py-3 text-xs font-medium text-emerald-800">
+                {savedNotice}
+              </p>
+            )}
+
             <StatusHistory ticket={ticket} defaultOpen className="mt-6 rounded-2xl bg-white/70 p-4" />
+
+            <TicketConversation key={ticket.id} ticket={ticket} />
           </>
         )}
 
