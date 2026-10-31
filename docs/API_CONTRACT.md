@@ -163,14 +163,14 @@ A request the server cannot read gets one of these answers, in the usual envelop
 | Status | Code | Message | When |
 | --- | --- | --- | --- |
 | 400 | `INVALID_JSON` | `Request body is not valid JSON` | The body is not valid JSON |
-| 400 | `INVALID_BODY_ENCODING` | `Request body could not be decoded` | A gzip, deflate, Brotli or zstd body is corrupt or cut off, or needs a dictionary the server does not have |
+| 400 | `INVALID_BODY_ENCODING` | `Request body could not be decoded` | A gzip, deflate or Brotli body is corrupt or cut off, or needs a dictionary the server does not have |
 | 400 | `INVALID_URL` | `Request URL is not correctly encoded` | A route parameter has bad percent-encoding, such as `/api/tickets/%E0%A4%A` |
 | 413 | `PAYLOAD_TOO_LARGE` | `Request body is too large` | The body is over 100 kB, including a compressed body that expands past it |
 | 415 | `UNSUPPORTED_CHARSET` | `Request body uses an unsupported character set` | The `Content-Type` charset is not supported, such as `koi8-r` or `utf-99` |
-| 415 | `UNSUPPORTED_ENCODING` | `Request body uses an unsupported content encoding` | The `Content-Encoding` is not supported |
+| 415 | `UNSUPPORTED_ENCODING` | `Request body uses an unsupported content encoding` | The `Content-Encoding` is not supported, including zstd |
 
 - **Only JSON requests are read this way.** The body checks apply when `Content-Type` is `application/json`. A route that needs a body gives 400 `VALIDATION_ERROR` when it has none (§6, §7).
-- **zstd depends on the Node.js version.** Node.js 22.15, 23.8 and later can decompress it. On an earlier version, `Content-Encoding: zstd` gives 415 `UNSUPPORTED_ENCODING` whatever the body contains.
+- **zstd request bodies are not supported.** `Content-Encoding: zstd`, in any letter case and alone or in a list, gives 415 `UNSUPPORTED_ENCODING` before the body is read, whatever the body or its `Content-Type`.
 - **Body errors come before everything in the next section.** The body is read before any route runs, so these answers do not depend on the token.
 - **`INVALID_URL` can come before authentication.** `GET /api/tickets/%E0%A4%A` with no token gives 400, not 401. A parameter that is correctly encoded but is not an ObjectId gives 400 `INVALID_ID` as usual.
 - **Other bad URLs are not `INVALID_URL`.** Bad encoding outside a route parameter does not reach this check: a path that matches no route gives 404, and a bad query string is not refused.
@@ -868,7 +868,7 @@ Errors: **400** `VALIDATION_ERROR` / `INVALID_ID` · **401** · **404**.
 | --- | --- | --- | --- |
 | `VALIDATION_ERROR` | 400 | Missing or invalid input; Mongoose validation errors | **Yes** (helper + mapping) |
 | `INVALID_JSON` | 400 | Malformed JSON body | **Yes** |
-| `INVALID_BODY_ENCODING` | 400 | Corrupt or cut-off compressed body (§2) | **Yes** |
+| `INVALID_BODY_ENCODING` | 400 | Corrupt or cut-off gzip, deflate or Brotli body (§2) | **Yes** |
 | `INVALID_URL` | 400 | Bad percent-encoding in a route parameter (§2) | **Yes** |
 | `INVALID_ID` | 400 | Path/body id is not a valid ObjectId | **Yes** (Mongoose CastError mapping) |
 | `INVALID_STATUS_TRANSITION` | 400 | Status change not allowed | **Yes** |
@@ -893,7 +893,7 @@ Errors: **400** `VALIDATION_ERROR` / `INVALID_ID` · **401** · **404**.
 | `INVALID_OR_EXPIRED_TOKEN` | 400 | Reset or email-confirmation link unknown, expired or used (§6a) | **Yes** |
 | `PAYLOAD_TOO_LARGE` | 413 | Body over 100 kB, measured after decompression | **Yes** |
 | `UNSUPPORTED_CHARSET` | 415 | Unsupported `Content-Type` charset (§2) | **Yes** |
-| `UNSUPPORTED_ENCODING` | 415 | Unsupported `Content-Encoding` (§2) | **Yes** |
+| `UNSUPPORTED_ENCODING` | 415 | Unsupported `Content-Encoding`, including zstd (§2) | **Yes** |
 | `EMAIL_DELIVERY_FAILED` | 503 | The confirmation email for an email change could not be sent (§6a) | **Yes** |
 | `RATE_LIMITED` | 429 | Too many sign-in or sign-up attempts from one client (D-9); sent with `Retry-After` | **Yes** |
 | `INTERNAL_ERROR` | 500 | Anything unexpected | **Yes** |
@@ -921,4 +921,4 @@ Modules should throw the specific code where one is listed (e.g. `ApiError.confl
 | 2026-10-30 | Documentation only, no API change: removed stray text from the title, replaced the out-of-date "proposal" status, listed §6a and §12a in the contents, recorded that `sessionStorage` is what runs for C-6, and corrected what a failed email logs. | Tirth Vaghela |
 | 2026-10-30 | Behaviour only, no request or response field changed: §6a links are cancelled after a password or email change (500 if that fails), and §8 failed emails log only the purpose and error codes. | Tirth Vaghela |
 | 2026-10-31 | Documentation only, no API change: §6 described as implemented, with its routes listed; §6 no longer says email and password changes do not exist; D-1 to D-11 joined in one table; 405, 429 and 503 added to the §2 status table; §4, D-5 and D-7 ownership follow the final team responsibilities. | Tirth Vaghela |
-| 2026-10-31 | v0.13: malformed requests (§2). New error codes `INVALID_BODY_ENCODING`, `INVALID_URL`, `UNSUPPORTED_CHARSET` and `UNSUPPORTED_ENCODING`, and status 415. These requests previously gave 500 `INTERNAL_ERROR`; existing fields and routes are unchanged. | Tirth Vaghela |
+| 2026-10-31 | v0.13: malformed requests (§2). New error codes `INVALID_BODY_ENCODING`, `INVALID_URL`, `UNSUPPORTED_CHARSET` and `UNSUPPORTED_ENCODING`, and status 415. These requests previously gave 500 `INTERNAL_ERROR`; existing fields and routes are unchanged. zstd request bodies are not supported and give 415. | Tirth Vaghela |

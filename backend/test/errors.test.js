@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import zlib, { deflateSync, gzipSync } from 'node:zlib';
+import zlib, { brotliCompressSync, deflateSync, gzipSync } from 'node:zlib';
 import express from 'express';
 import mongoose from 'mongoose';
 import request from 'supertest';
@@ -231,9 +231,11 @@ describe('malformed requests', () => {
     });
   }
 
-  // body-parser decompresses zstd only where Node can: 22.15, 23.8 and later. Elsewhere it refuses
-  // the encoding, so each runtime is held to the answer it should give, and the corrupt bodies below
-  // really reach the decoder wherever it exists.
+  // The real app refuses zstd before parsing (below). These tests use a parser with no such refusal,
+  // to check the error mappings kept in errorHandler.js. body-parser decompresses zstd only where
+  // Node can: 22.15, 23.8 and later. Elsewhere it refuses the encoding, so each runtime is held to
+  // the answer it should give. A cut-off body is not tested here: its answer depends on the runtime,
+  // which is why the real app refuses zstd.
   const zstdAvailable = 'createZstdDecompress' in zlib;
   const [major, minor] = process.versions.node.split('.').map(Number);
   const zstdExpected = major >= 24 || (major === 23 && minor >= 8) || (major === 22 && minor >= 15);
@@ -257,25 +259,104 @@ describe('malformed requests', () => {
       ['a corrupt block', () => zstdFrame(0x20, 0x00, 0x07, 0x00, 0x00)],
       ['a dictionary this server does not have', () => zstdFrame(0x01, 0x00, 0x07, 0x01, 0x00, 0x00)],
       ['a wrong checksum', wrongChecksum],
-      ['the end cut off', () => valid().subarray(0, 6)],
     ];
 
     for (const [name, body] of corruptBodies) {
-      it(`a zstd body with ${name} is 400 INVALID_BODY_ENCODING`, async () => {
+      it(`without the app's refusal, a zstd body with ${name} is 400 INVALID_BODY_ENCODING`, async () => {
         assertSafe(await post({ 'Content-Encoding': 'zstd' }, body()), 400, 'INVALID_BODY_ENCODING');
       });
     }
 
-    it('still accepts a valid zstd body', async () => {
+    it('without the app\'s refusal, the parser decodes a valid zstd body', async () => {
       const res = await post({ 'Content-Encoding': 'zstd' }, valid());
       assert.equal(res.status, 200);
       assert.deepEqual(res.body.body, { a: 3 });
     });
   } else {
-    it(`zstd cannot be decompressed on Node ${process.versions.node}, so it is 415 UNSUPPORTED_ENCODING`, async () => {
+    it(`without the app's refusal, zstd cannot be decompressed on Node ${process.versions.node}, so it is 415 UNSUPPORTED_ENCODING`, async () => {
       assertSafe(await post({ 'Content-Encoding': 'zstd' }, 'not compressed at all'), 415, 'UNSUPPORTED_ENCODING', 'zstd');
     });
   }
+
+  describe('zstd request bodies on the real app', () => {
+    // Fixed bytes, so these do not need a runtime that can compress zstd: the frame for {"a":3}.
+    const wholeFrame = Buffer.from('28b52ffd24073900007b2261223a337daa5053fc', 'hex');
+    const toLogin = (headers, body) => post(headers, body, { target: realApp, path: '/api/auth/login' });
+
+    const refused = [
+      ['a whole frame', wholeFrame],
+      ['a frame cut off with no output', wholeFrame.subarray(0, 6)],
+      ['a frame cut off in its content', wholeFrame.subarray(0, 12)],
+      ['a frame with its checksum cut off', wholeFrame.subarray(0, 16)],
+      ['text that is not zstd', Buffer.from('not compressed at all')],
+    ];
+    for (const [name, body] of refused) {
+      it(`${name} is 415 UNSUPPORTED_ENCODING`, async () => {
+        const res = await toLogin({ 'Content-Encoding': 'zstd' }, body);
+        assertSafe(res, 415, 'UNSUPPORTED_ENCODING', 'zstd');
+        assert.equal(res.body.error.message, 'Request body uses an unsupported content encoding');
+      });
+    }
+
+    for (const header of ['ZSTD', 'Zstd', '  zstd  ', 'gzip, zstd', 'zstd,gzip', 'gzip , ZSTD ']) {
+      it(`Content-Encoding "${header}" is 415 UNSUPPORTED_ENCODING`, async () => {
+        assertSafe(await toLogin({ 'Content-Encoding': header }, wholeFrame), 415, 'UNSUPPORTED_ENCODING', 'zstd');
+      });
+    }
+
+    // The parser skips these, so only the refusal can answer: a list in JSON would get 415 either way.
+    for (const header of ['zstd', 'gzip , ZSTD ']) {
+      it(`a body that is not JSON, with Content-Encoding "${header}", is refused too`, async () => {
+        const res = await toLogin({ 'Content-Type': 'text/plain', 'Content-Encoding': header }, wholeFrame);
+        assertSafe(res, 415, 'UNSUPPORTED_ENCODING', 'zstd');
+      });
+    }
+
+    it('the refusal keeps the security headers', async () => {
+      const res = await toLogin({ 'Content-Encoding': 'zstd' }, wholeFrame);
+      assert.equal(res.headers['x-content-type-options'], 'nosniff');
+    });
+
+    it('the refusal runs before the JSON parser', () => {
+      const names = realApp.router.stack.map((layer) => layer.name);
+      assert.ok(names.includes('jsonParser'));
+      assert.ok(names.indexOf('rejectZstdBodies') !== -1);
+      assert.ok(names.indexOf('rejectZstdBodies') < names.indexOf('jsonParser'));
+    });
+
+    if (zstdAvailable) {
+      it('a refused body never reaches the zstd decoder', async (t) => {
+        const decoder = t.mock.method(zlib, 'createZstdDecompress');
+        await toLogin({ 'Content-Encoding': 'zstd' }, wholeFrame);
+        assert.equal(decoder.mock.callCount(), 0);
+
+        // The spy does see the parser's use of it, so the count above means something.
+        await post({ 'Content-Encoding': 'zstd' }, wholeFrame);
+        assert.equal(decoder.mock.callCount(), 1);
+      });
+    }
+
+    // Only the email is sent: an answer about the password shows the body was decoded and read.
+    const onlyEmail = '{"email":"someone@example.com"}';
+    const others = [
+      ['gzip', gzipSync(onlyEmail)],
+      ['GZIP', gzipSync(onlyEmail)],
+      ['deflate', deflateSync(onlyEmail)],
+      ['br', brotliCompressSync(onlyEmail)],
+    ];
+    for (const [encoding, body] of others) {
+      it(`a valid ${encoding} body is still decoded and reaches the route`, async () => {
+        const res = await toLogin({ 'Content-Encoding': encoding }, body);
+        assert.equal(res.status, 400);
+        assert.equal(res.body.error.code, 'VALIDATION_ERROR');
+        assert.match(res.body.error.message, /password/i);
+      });
+    }
+
+    it('a corrupt gzip body is still 400 INVALID_BODY_ENCODING', async () => {
+      assertSafe(await toLogin({ 'Content-Encoding': 'gzip' }, 'not compressed at all'), 400, 'INVALID_BODY_ENCODING');
+    });
+  });
 
   it('bad URL encoding in a route parameter is 400 INVALID_URL', async () => {
     assertSafe(await request(paramApp).get('/item/%E0%A4%A'), 400, 'INVALID_URL', '%E0%A4%A');
