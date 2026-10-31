@@ -1,6 +1,6 @@
 # Help Desk Data Model
 
-> **Status: implemented.** Every model below exists in `backend/src/models/`. The labels (Confirmed, Proposed, Open, Default) record where each decision came from and whether the responsible owner has agreed; they do not mean the item is unbuilt. Engineering defaults D-1 to D-7 from [API_CONTRACT.md §1](API_CONTRACT.md#engineering-defaults-d1d7) are marked **Default**.
+> **Status: implemented.** Every model below exists in `backend/src/models/`. The labels (Confirmed, Proposed, Open, Default) record where each decision came from and whether the responsible owner has agreed; they do not mean the item is unbuilt. Engineering defaults D-1 to D-11 from [API_CONTRACT.md §1](API_CONTRACT.md#engineering-defaults-d-1-to-d-11) are marked **Default** where this document relies on them.
 > This document does not change [API_CONTRACT.md](API_CONTRACT.md); where the two differ, the difference is recorded in [Section 9](#9-discrepancies-between-sources) instead of being resolved here.
 
 ## Contents
@@ -35,7 +35,7 @@
 | **Confirmed** | Stated as a HANDBOOK requirement in the Brief, or marked DECIDED in the Contract. |
 | **Proposed** | A suggestion: either from the Contract draft / Brief PROPOSED items (source given), or new in this document (marked "this doc"). Not yet approved. |
 | **Open** | Needs a decision from the responsible teammates. Listed in [Section 8](#8-open-questions). |
-| **Default** | An engineering default (D-1 to D-7 in the Contract) chosen to unblock implementation. Not a team approval; confirmed by the owner when reviewing the implementing pull request. |
+| **Default** | An engineering default (D-1 to D-11 in the Contract) chosen to unblock implementation. Not a team approval; confirmed by the owner when reviewing the implementing pull request. |
 
 Field rules such as lengths and enum spellings come from the Contract draft. They are **Proposed** until the model owners approve them, even though the frontend may already be building against them.
 
@@ -52,7 +52,7 @@ Field rules such as lengths and enum spellings come from the Contract draft. The
 | S-5 | Timestamps are returned as ISO 8601 strings in UTC. | Proposed | Contract §2 |
 | S-6 | Referenced users are returned as `UserSummary` `{ id, name, role }`; referenced categories as `{ id, name }`. | Proposed | Contract §3 |
 | S-7 | Ticket **list** responses omit `description` and `statusHistory`. | Proposed | Contract §3 |
-| S-8 | Implement S-1, S-3 and S-4 once, as a shared Mongoose `toJSON` transform, instead of in each controller. Where it lives is open (Q-8). | Proposed | this doc |
+| S-8 | Implement S-1, S-3 and S-4 once, as a shared Mongoose `toJSON` transform, instead of in each controller. Where it lives: **Default** (Q-8). | Proposed | this doc |
 | S-9 | Use Mongoose `timestamps` for `createdAt` / `updatedAt` rather than setting them by hand. | Proposed | this doc |
 | S-10 | Fixed value sets (roles, statuses, priorities) are enforced as schema `enum`s, so invalid values are rejected by the database layer as well as by request validation. | Proposed | this doc |
 | S-11 | Strings are trimmed by the schema (`trim: true`) as well as by request validation. | Proposed | this doc (Contract §2 says inputs are trimmed) |
@@ -91,7 +91,7 @@ Stored as its own collection: **Default** (D-6, contract C-4). Inactive categori
 | Field | Type | Rules | Label | Source |
 | --- | --- | --- | --- | --- |
 | *(model)* | — | Admins manage categories | **Confirmed** (admins manage categories) | Brief §2 (HANDBOOK, admin controls) |
-| | | Stored as its own collection | **Open** (Q-1) | Brief §4 lists it as *optional*; Contract C-4 proposes a collection |
+| | | Stored as its own collection | **Default** (D-6, Q-1) | Brief §4 lists it as *optional*; Contract C-4 proposes a collection |
 | `name` | String | Required, trimmed, 2–50 characters, unique **case-insensitive** | Proposed | Contract §10 |
 | `description` | String | Optional, trimmed, at most 200 characters, default `""` | Implemented (2026-10-29) | Contract D-9 (admin category screen) |
 | `isActive` | Boolean | Default `true`. Inactive categories stay on existing tickets but cannot be chosen for new ones. | Proposed | Brief §4 (field listed), Contract §10 |
@@ -106,7 +106,7 @@ Stored as its own collection: **Default** (D-6, contract C-4). Inactive categori
 | | | Format `HD-` + sequential number | Proposed | Brief §2 (PROPOSED), Contract §3 |
 | `subject` | String | Required, trimmed, 5–120 characters | Proposed (field itself **Confirmed**) | Brief §2 (HANDBOOK: customer submits subject); lengths Contract §7 |
 | `description` | String | Required, trimmed, 10–5000 characters | Proposed (field itself **Confirmed**) | Brief §2 (HANDBOOK); lengths Contract §7 |
-| `category` | Ref Category | Required; must be active when the ticket is created | Proposed (a category on each ticket is **Confirmed**) | Brief §2 (HANDBOOK); reference vs fixed list is **Open** (Q-1) |
+| `category` | Ref Category | Required; must be active when the ticket is created | Proposed (a category on each ticket is **Confirmed**) | Brief §2 (HANDBOOK); reference vs fixed list is **Default** (D-6, Q-1) |
 | `priority` | String enum | Values `low`, `medium`, `high`. Customer sets it on creation; an agent may change it. | **Confirmed** (customer submits priority; agent sets priority) | Brief §2 (HANDBOOK) |
 | | | Exact values `low`/`medium`/`high` | Proposed | Brief §4, Contract §3 |
 | `status` | String enum | Workflow Open → In Progress → Resolved | **Confirmed** | Brief §2 (HANDBOOK) |
@@ -116,7 +116,7 @@ Stored as its own collection: **Default** (D-6, contract C-4). Inactive categori
 | `createdBy` | Ref User | Required. Set from the authenticated user, never from the request body. | **Confirmed** (ticket references its owner) | Brief §4 (HANDBOOK) |
 | `assignedTo` | Ref User | `null` when unassigned. Default `null`. | **Confirmed** (ticket references assigned agent) | Brief §4 (HANDBOOK) |
 | | | `null` meaning "unassigned" is part of the access rule | **Confirmed** | Contract OPEN-1 (DECIDED) |
-| | | Who may be assigned, and by whom | **Open** (Q-5) | Contract C-5, C-8 |
+| | | Who may be assigned, and by whom | **Default** (D-1, D-2, Q-5) | Contract C-5, C-8 |
 | `resolvedAt` | Date | `null` until status becomes `resolved` | Proposed | Brief §4, Contract §3 |
 | `dueAt` | Date | SLA resolution due date: `createdAt` + the target hours for the priority (`utils/sla.js`; defaults high 24, medium 72, low 168 calendar hours from `SLA_HOURS_*`). Set by the server on creation; recalculated from `createdAt` in the same atomic update when the priority changes. Default `null`: tickets created before SLAs keep no due date (no backfill). Returned to staff only. | Implemented (2026-10-30) | Stretch goal "SLA due dates", Contract §3 |
 | `createdAt`, `updatedAt` | Date | Via `timestamps` | Proposed | Brief §4, Contract §3 |
@@ -125,7 +125,7 @@ Status transitions allowed: `open → in_progress`, `in_progress → resolved`; 
 
 ### 3.4 TicketComment (Contract shape name: "Comment")
 
-Model name **`TicketComment`**: **Default** (D-4). The API keeps the JSON shape name "Comment" and the keys `comment` / `comments`. Implemented by the agent-workflow module. See [Section 9](#9-discrepancies-between-sources).
+Model name **`TicketComment`**: **Default** (D-4). The API keeps the JSON shape name "Comment" and the keys `comment` / `comments`. Responsibility: the agent-workflow module (Ayushi). See [Section 9](#9-discrepancies-between-sources).
 
 | Field | Type | Rules | Label | Source |
 | --- | --- | --- | --- | --- |
@@ -290,13 +290,13 @@ Consequences to accept or reject:
 | A-2 | Agent list filter: `{ $or: [ { assignedTo: null }, { assignedTo: <agentId> } ] }`, combined (AND) with any queue filters. Because the policy is part of the query, `total` counts only tickets the agent may see. | Rule **Confirmed**; query shape Proposed |
 | A-3 | Single-ticket check for agents: allowed if `ticket.assignedTo` is `null` or equals the agent's id (compare ObjectIds with `.equals()`, not `===`). | Rule **Confirmed**; implementation note Proposed |
 | A-4 | Customers: allowed only if `ticket.createdBy` equals their id. Admins: all tickets. | Customers seeing only their own tickets, checked on the server: **Confirmed** (Brief §2 and §5, HANDBOOK). Admins seeing all tickets: Proposed (Brief §5 permission matrix is PROPOSED; Contract §4). |
-| A-5 | Comments inherit the ticket's access rule (`GET`/`POST /api/tickets/:id/comments` are marked Agent\* in the Contract). | **Confirmed** (Agent\* endpoints follow OPEN-1) |
+| A-5 | Comments inherit the ticket's access rule (`GET`/`POST /api/tickets/:id/comments` are marked Agent\* in the Contract). Posting is narrower: an agent must be the ticket's assignee (D-11). | **Confirmed** (Agent\* endpoints follow OPEN-1); who may post: **Default** (D-11) |
 | A-6 | When a ticket is assigned to agent X, every other agent loses access to it and its comments, as a direct result of the rule's wording. If it is later reassigned to Y, X loses access. | Follows from the decided wording; **reviewer to confirm** this is the intended effect |
 | A-7 | Only an existing, active `agent` or `admin` may be stored in `assignedTo` (D-2). Agents may set only themselves or `null`; admins may set any eligible user (D-1). | **Default** (D-1, D-2) |
 | A-8 | Tickets assigned to an agent who is later **deactivated** stay assigned and become visible only to admins until reassigned. | **Open** (Q-6) |
-| A-9 | A-2 to A-4 are implemented once, in `backend/src/utils/ticketAccess.js`, used by every ticket and comment route (including Swati's), so lists and single-ticket checks cannot drift apart. Owned by the agent-workflow module. | **Default** (D-5) |
+| A-9 | A-2 to A-4 are implemented once, in `backend/src/utils/ticketAccess.js`, used by every route that reads or changes an existing ticket or its comments (including the agent-workflow routes), so lists and single-ticket checks cannot drift apart. Responsibility: Swatismita (ticket ownership and access checks). | **Default** (D-5) |
 
-The role used in these checks is read from the database on each request, not from the token or the client: Proposed (Contract §6, "Token rules — Proposed").
+The role used in these checks is read from the database on each request, not from the token or the client: implemented (Contract §6, "Token rules").
 
 ---
 
@@ -304,24 +304,24 @@ The role used in these checks is read from the database on each request, not fro
 
 | # | Question | Options | Current proposal | Decides |
 | --- | --- | --- | --- | --- |
-| Q-1 | **Category storage**: separate `Category` collection or a fixed list in code? (Contract C-4) | (a) Collection with admin CRUD; (b) fixed enum | **Default (D-6): (a).** Contract C-4 proposes it, and the handbook requires admins to manage categories. | Swati (to confirm) |
-| Q-2 | **Comment model name**: `TicketComment` or `Comment`? | (a) `TicketComment` (Brief collection name); (b) `Comment` (Contract shape name) | **Default (D-4): (a)** for the model; the API keeps `comment` / `comments` as JSON keys either way | Ayushi + Swati (to confirm) |
-| Q-3 | **Ticket-number starting value**: `HD-1`, `HD-101`, other? | — | None | Swati |
-| Q-4 | **History/audit**: is `statusHistory` enough, or is the optional `TicketHistory` audit trail (assignment and priority changes too) required? | (a) `statusHistory` only; (b) add `TicketHistory` | (a). It covers the handbook requirement; (b) is optional in the Brief. | Ayushi + Swati |
+| Q-1 | **Category storage**: separate `Category` collection or a fixed list in code? (Contract C-4) | (a) Collection with admin CRUD; (b) fixed enum | **Default (D-6): (a).** Contract C-4 proposes it, and the handbook requires admins to manage categories. | Swatismita (to confirm) |
+| Q-2 | **Comment model name**: `TicketComment` or `Comment`? | (a) `TicketComment` (Brief collection name); (b) `Comment` (Contract shape name) | **Default (D-4): (a)** for the model; the API keeps `comment` / `comments` as JSON keys either way | Ayushi + Swatismita (to confirm) |
+| Q-3 | **Ticket-number starting value**: `HD-1`, `HD-101`, other? | — | None | Swatismita |
+| Q-4 | **History/audit**: is `statusHistory` enough, or is the optional `TicketHistory` audit trail (assignment and priority changes too) required? | (a) `statusHistory` only; (b) add `TicketHistory` | (a). It covers the handbook requirement; (b) is optional in the Brief. | Ayushi + Swatismita |
 | Q-5 | **Assignment permissions**: who can be an assignee (C-5), and may an agent assign a ticket to another agent or only to themselves (C-8)? | — | **Default (D-1, D-2):** assignee must be an active `agent` or `admin`; agents assign only themselves or `null`; admins assign anyone eligible. | Ayushi (to confirm) |
-| Q-6 | **Deactivated assignee**: what happens to their assigned tickets? | (a) Leave assigned, admin reassigns; (b) unassign automatically on deactivation | None | Ayushi + Swati |
+| Q-6 | **Deactivated assignee**: what happens to their assigned tickets? | (a) Leave assigned, admin reassigns; (b) unassign automatically on deactivation | None | Ayushi + Swatismita |
 | Q-7 | **Deletion**: are users, tickets, categories or comments ever deleted? | — | No delete endpoints in the Contract; deactivate instead | Team |
-| Q-8 | **Where the shared `toJSON` transform lives** (S-8) and who owns it | e.g. `backend/src/models/plugins/` or `backend/src/utils/` | **Default:** `backend/src/models/toJSON.js`, applied by every model | Swati (to confirm) |
-| Q-9 | **`updatedAt` on User and Category**: the Brief lists only `createdAt` for User | — | Use `timestamps` (both fields) | Swati |
-| Q-10 | **Category reference on inactive categories**: should `GET /api/tickets/:id` still show the name of a deactivated category? | — | Yes (Contract §10 says they stay on existing tickets) | Swati |
+| Q-8 | **Where the shared `toJSON` transform lives** (S-8) and who owns it | e.g. `backend/src/models/plugins/` or `backend/src/utils/` | **Default:** `backend/src/models/toJSON.js`, applied by every model | Swatismita (to confirm) |
+| Q-9 | **`updatedAt` on User and Category**: the Brief lists only `createdAt` for User | — | Use `timestamps` (both fields) | Swatismita |
+| Q-10 | **Category reference on inactive categories**: should `GET /api/tickets/:id` still show the name of a deactivated category? | — | Yes (Contract §10 says they stay on existing tickets) | Swatismita |
 
-Related Contract points that are still open and touch the data model indirectly: C-1 (replies on resolved tickets), C-2 (admin modifying self), C-3 (token lifetime), C-6 (token storage), C-7 (logout).
+Related Contract points that touch the data model indirectly. Still **OPEN**: C-3 (token lifetime), C-6 (token storage), C-7 (logout). **DEFAULT**: C-1 (replies on resolved tickets, D-3), C-2 (admin modifying self, D-8).
 
 ---
 
 ## 9. Discrepancies between sources
 
-Recorded, not resolved. Each needs the owner's confirmation.
+Recorded, not resolved. Each needs the owner's confirmation. The numbers in this table are local to this section: they are **not** the Contract's engineering defaults D-1 to D-11.
 
 | # | Topic | Brief says | Contract says | Impact |
 | --- | --- | --- | --- | --- |
@@ -330,24 +330,24 @@ Recorded, not resolved. Each needs the owner's confirmation.
 | D-3 | Ticket category field naming | Field `category` | Request body uses `categoryId`; response uses `category: { id, name }` | None for the model (`category` ref); request mapping only |
 | D-4 | User timestamps | `createdAt` only | User shape shows `createdAt` only | Whether to store `updatedAt` (Q-9) |
 | D-5 | Ticket-number format | `HD-` + sequential number is PROPOSED; HD-104 is an example | Same, plus atomic-counter recommendation | Starting value (Q-3) |
-| D-6 | Owner name | — | Contract uses "Swati" in decisions and "Swatismita" in the endpoint owner column; README marks the spelling as unconfirmed | Documentation only |
+| D-6 | Owner name | — | Contract uses "Swatismita" in its endpoint owner and team tables, and still "Swati" in some decisions and change-log entries; README uses "Swatismita" | Documentation only |
 
 ---
 
 ## 10. Ownership and review
 
-Ownership follows the team allocation in the README. This document assigns no new work.
+Ownership follows the final team responsibilities in [API_CONTRACT.md §4](API_CONTRACT.md#4-endpoint-summary) and the README. It records who is responsible, not who wrote the code. This document assigns no new work.
 
-| Item | Implements | Reviews |
+| Item | Responsible | Reviews |
 | --- | --- | --- |
-| This document (accuracy, keeping it in sync with the Contract) | Tirth Vaghela | Swati, Ayushi |
-| `User`, `Category`, `Ticket` models; ticket creation and numbering (incl. `Counter`); ownership checks | Swati | Tirth (consistency with Contract), Ayushi (`assignedTo`, `statusHistory`) |
-| Ticket-comment model (`TicketComment`) | Agent-workflow module (Ayushi) — **Default** (D-4) | Swati + Tirth |
-| Queue query, assignment and status transitions using `assignedTo` / `statusHistory` | Ayushi | Swati, Tirth |
-| Shared access helper (A-9, `ticketAccess.js`) | Agent-workflow module (Ayushi) — **Default** (D-5) | Swati + Tirth |
+| This document (accuracy, keeping it in sync with the Contract) | Tirth Vaghela | Swatismita, Ayushi |
+| `User`, `Category`, `Ticket` models; ticket creation and numbering (incl. `Counter`); ownership checks | Swatismita | Tirth (consistency with Contract), Ayushi (`assignedTo`, `statusHistory`) |
+| Ticket-comment model (`TicketComment`) | Agent-workflow module (Ayushi) — **Default** (D-4) | Swatismita + Tirth |
+| Queue query, assignment and status transitions using `assignedTo` / `statusHistory` | Ayushi | Swatismita, Tirth |
+| Shared access helper (A-9, `ticketAccess.js`): ticket ownership and access checks | Swatismita — **Default** (D-5) | Ayushi (agent rule, OPEN-1) + Tirth |
 | JSON shapes consumed by the UI | Backend owners above | Mimansa (customer screens), Shwetaleena (agent/admin screens) |
 | Indexes | Model owners | Tirth |
-| Test fixtures for these models (`backend/test/helpers/`) | Tirth, after the models are merged | Model owners |
+| Test fixtures for these models (`backend/test/helpers/`) | Tirth | Model owners |
 
 **How to change this document:** open a pull request that updates it together with any related change to `API_CONTRACT.md`, and move items from Proposed/Open to Confirmed only when the responsible owner has agreed in that pull request.
 
@@ -363,3 +363,4 @@ Ownership follows the team allocation in the README. This document assigns no ne
 | 2026-10-30 | §3.3 Ticket `dueAt` (SLA resolution due date) and §5 index `{ status: 1, dueAt: 1 }`. Optional field: existing tickets need no migration. | Tirth Vaghela |
 | 2026-10-30 | §5: analytics adds no schema or index; the stated purpose of `{ status: 1, dueAt: 1 }` corrected. | Tirth Vaghela |
 | 2026-10-30 | Documentation only, no schema change: status updated to implemented; email length limit, relationships and duplicate-submission handling added; index uses corrected from `explain`, including `{ status: 1, dueAt: 1 }` being unused. | Tirth Vaghela |
+| 2026-10-31 | Documentation only, no schema change: `ticketAccess.js` (A-9, §10) assigned to Swatismita to match Contract D-5; decision references updated to D-1 to D-11, and items the Contract records as DEFAULT no longer shown as open; §10 records responsibility rather than authorship and uses the final team names. | Tirth Vaghela |
