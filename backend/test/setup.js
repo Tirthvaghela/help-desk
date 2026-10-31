@@ -2,8 +2,13 @@
 // These values are set before src/config/env.js runs, and dotenv never overrides
 // variables that already exist, so tests always use the test database even when
 // a developer's backend/.env points at real data.
+import { assertLocalTestUri } from './helpers/localTestUri.js';
+
+const testDatabaseUri = process.env.MONGODB_URI_TEST || 'mongodb://127.0.0.1:27017/helpdesk_test';
+// Stops every test file before anything can connect, if MONGODB_URI_TEST is not local.
+assertLocalTestUri(testDatabaseUri);
 process.env.NODE_ENV = 'test';
-process.env.MONGODB_URI = process.env.MONGODB_URI_TEST || 'mongodb://127.0.0.1:27017/helpdesk_test';
+process.env.MONGODB_URI = testDatabaseUri;
 process.env.JWT_SECRET = 'test-only-jwt-secret';
 process.env.CLIENT_URL = 'http://localhost:5173';
 // Email goes to memory and rate limits are off, whatever backend/.env says. A test file

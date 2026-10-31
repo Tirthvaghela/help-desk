@@ -1,8 +1,10 @@
 import mongoose from 'mongoose';
+import { assertLocalTestUri } from './localTestUri.js';
 
 // Database helpers for tests that need MongoDB.
-// Every function refuses to run unless the database name ends in "_test",
-// so a misconfigured URI can never modify development or production data.
+// Every function refuses to run unless the database name ends in "_test", and connecting also
+// needs a server on this machine, so a misconfigured URI can never modify development or
+// production data.
 
 function assertTestDatabase() {
   const name = mongoose.connection.name;
@@ -15,6 +17,7 @@ function assertTestDatabase() {
 // With REQUIRE_TEST_DB=1 (set in CI), an unreachable database throws instead,
 // so database tests fail rather than being skipped.
 export async function connectTestDB() {
+  assertLocalTestUri(process.env.MONGODB_URI);
   try {
     await mongoose.connect(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 2000 });
   } catch (err) {

@@ -1,6 +1,6 @@
 # Help Desk API Contract
 
-> **Status: v0.13. Every endpoint below is implemented.** Points still waiting for a team decision are listed in [Section 1](#1-decisions).
+> **Status: v0.14. Every endpoint below is implemented.** Points still waiting for a team decision are listed in [Section 1](#1-decisions).
 > This document is the agreement the backend and frontend build against. Change it through a pull request so everyone sees the change.
 
 Source: project brief *Help Desk — Customer Support Ticket System* v0.2 (Sections 2, 4, 5 and 8). Where the brief leaves a choice open, this document says so.
@@ -150,11 +150,31 @@ Every error uses one envelope. This is already implemented in `backend/src/middl
 | 415 | The request body uses a character set or content encoding the server does not support (see [Malformed requests](#malformed-requests)) |
 | 429 | `RATE_LIMITED`: too many requests from one client IP in the current window, with a `Retry-After` header (seconds). Applies to `POST` on `/api/auth/register`, `/login`, `/me/password`, `/me/email`, `/verify-email`, `/forgot-password`, `/reset-password/check` and `/reset-password` (§6, §6a). |
 | 500 | Unexpected server error. Message is always generic; details are only logged on the server. |
-| 503 | `EMAIL_DELIVERY_FAILED`: the confirmation email for `POST /api/auth/me/email` could not be sent, so nothing stays pending (§6a). `GET /api/health` also returns 503 when MongoDB is disconnected, with its health body rather than an error envelope (§5). |
+| 503 | `EMAIL_DELIVERY_FAILED`: the confirmation email for `POST /api/auth/me/email` could not be sent, so nothing stays pending (§6a). `DATABASE_UNAVAILABLE`: the request needs the database and it cannot be reached (see [Database unavailable](#database-unavailable)). `GET /api/health` also returns 503 when the database does not answer, with its health body rather than an error envelope (§5). |
 
 **`message` is safe to show to users. Frontend logic should branch on `status` and `code`, never on the message text.**
 
 Backend helpers (implemented): `ApiError.badRequest()`, `.unauthorized()`, `.forbidden()`, `.notFound()`, `.conflict()` in `backend/src/utils/ApiError.js`, and `requireString`, `requireOneOf`, `requireEmail` in `backend/src/utils/validate.js`. Mongoose validation errors, invalid ObjectIds and duplicate-key errors are converted to 400 / 400 / 409 automatically.
+
+### Database unavailable
+
+A request that needs the database gets **503** `DATABASE_UNAVAILABLE` when the database cannot be reached:
+
+```json
+{ "error": { "code": "DATABASE_UNAVAILABLE", "message": "The service is temporarily unavailable. Please try again in a moment." } }
+```
+
+| Applies to | When |
+| --- | --- |
+| Any route that requires sign-in | After the token has been verified: a missing or invalid token still gets 401 |
+| `POST` on `/api/auth/register`, `/login`, `/verify-email`, `/forgot-password`, `/reset-password/check` and `/reset-password` | After the rate limit: over the limit still gets 429. Input is checked after this, so invalid input gets 503 during an outage |
+| Any request whose database work loses the connection part-way | At that point, whatever the route. The exception is best-effort notifications: their failures are caught and logged, so the request still succeeds |
+
+- **How long:** a request that finds the connection lost, or finds none yet, gets this within about 7 seconds. If the database stops answering while a request is running and the driver has not noticed yet, that request can wait up to about 20 seconds.
+- **Other answers:** answers that need no database do not change during an outage: 401 for a missing or invalid token, 404 for an unknown path, 405 for an unsupported method, 400 for a malformed body, and CORS preflights.
+- **Response:** it carries the usual CORS and security headers, and never the reason, which is only logged.
+- **Retrying a write:** **a 503 does not prove a write failed.** If the connection was lost part-way, the change may already have reached the database, and steps after it may not have run. Clients must not assume the write failed: re-read the data before retrying, or send the same `Idempotency-Key` when creating a ticket.
+- **Rate limits:** on the routes above that have one, attempts that get 503 still count towards the limit, so repeated retries during an outage can give 429 afterwards.
 
 ### Malformed requests
 
@@ -178,12 +198,14 @@ A request the server cannot read gets one of these answers, in the usual envelop
 
 ### Order of checks on protected routes
 
-1. Authenticated? Otherwise **401**.
-2. Account active? Otherwise **403 `ACCOUNT_DISABLED`**.
-3. Role allowed for this route? Otherwise **403 `FORBIDDEN`**.
-4. Request valid (IDs, body)? Otherwise **400**.
-5. Resource exists? Otherwise **404**.
-6. Ownership / access policy allows this resource? Otherwise **403 `FORBIDDEN`**.
+1. Token present and valid? Otherwise **401**.
+2. Database available? Otherwise **503 `DATABASE_UNAVAILABLE`**.
+3. User still exists and session current? Otherwise **401**.
+4. Account active? Otherwise **403 `ACCOUNT_DISABLED`**.
+5. Role allowed for this route? Otherwise **403 `FORBIDDEN`**.
+6. Request valid (IDs, body)? Otherwise **400**.
+7. Resource exists? Otherwise **404**.
+8. Ownership / access policy allows this resource? Otherwise **403 `FORBIDDEN`**.
 
 ---
 
@@ -323,15 +345,17 @@ The frontend team builds its screens against these endpoints and owns no backend
 
 ### `GET /api/health` — **Implemented**
 
-Public. Used by the frontend status check and by the deployment host.
+Public. For the deployment host and monitoring; the frontend does not call it. Any answer in this format means the API process is running; the status says whether the database answered.
 
-**200** when MongoDB is connected:
+Each call pings the database, with a limit of about 2.5 seconds, because the connection state alone can stay "connected" for a while after a database stops answering. If the process has no connection yet, it first tries to connect, waiting about 7 seconds at most. No other route pings. Other methods get 405 at once, without contacting the database.
+
+**200** when the database answered the ping:
 
 ```json
 { "status": "ok", "database": "connected", "uptimeSeconds": 42, "timestamp": "2026-10-24T09:00:00.000Z" }
 ```
 
-**503** when MongoDB is disconnected:
+**503** when it did not answer in time, or no connection could be made:
 
 ```json
 { "status": "degraded", "database": "disconnected", "uptimeSeconds": 42, "timestamp": "2026-10-24T09:00:00.000Z" }
@@ -471,7 +495,7 @@ Logged in.
 
 ### `POST /api/auth/verify-email`
 
-Public (the link may be opened on any device). Request: `{ "token": "…" }`. **200** `{ "email": "…" }`; open password-reset links are cancelled, and the old address gets a notice. A refused change keeps the old email and those links. If the links cannot be cancelled, the change is undone and the answer is **500**. Errors: **400 `INVALID_OR_EXPIRED_TOKEN`** (unknown, expired, already used, or the account is deactivated) · **409** `EMAIL_TAKEN` (registered by someone else meanwhile; the link is used up) · **429**.
+Public (the link may be opened on any device). Request: `{ "token": "…" }`. **200** `{ "email": "…" }`; open password-reset links are cancelled, and the old address gets a notice. A refused change keeps the old email and those links. If the links cannot be cancelled, the change is undone and the answer is **500**. If the cause is a lost database connection, the answer is **503** `DATABASE_UNAVAILABLE` instead, and the undo may also fail, so the final outcome can be uncertain (see [Database unavailable](#database-unavailable)). Errors: **400 `INVALID_OR_EXPIRED_TOKEN`** (unknown, expired, already used, or the account is deactivated) · **409** `EMAIL_TAKEN` (registered by someone else meanwhile; the link is used up) · **429**.
 
 ### `POST /api/auth/forgot-password`
 
@@ -482,7 +506,7 @@ Public. Request: `{ "email": "…" }`. **Always 200** with the same `{ "message"
 Public.
 
 - **check** `{ "token": "…" }` → **200** `{ "valid": true, "expiresAt": "…" }` (does not use the link).
-- **reset** `{ "token": "…", "newPassword": "…" }` → **200** `{ "message": "…" }`. The password is validated **before** the link is used. Signs the user out everywhere and cancels any pending email change; **does not sign them in**. If the links cannot be cancelled, the password is not changed and the answer is **500**; the link used is then spent, so a new one must be requested.
+- **reset** `{ "token": "…", "newPassword": "…" }` → **200** `{ "message": "…" }`. The password is validated **before** the link is used. Signs the user out everywhere and cancels any pending email change; **does not sign them in**. If the links cannot be cancelled, the password is not changed and the answer is **500**; the link used is then spent, so a new one must be requested. If the cause is a lost database connection, the answer is **503** `DATABASE_UNAVAILABLE` instead, and the outcome can be uncertain (see [Database unavailable](#database-unavailable)).
 
 Errors: **400** `VALIDATION_ERROR` (password rules) · **400 `INVALID_OR_EXPIRED_TOKEN`** · **429**.
 
@@ -895,6 +919,7 @@ Errors: **400** `VALIDATION_ERROR` / `INVALID_ID` · **401** · **404**.
 | `UNSUPPORTED_CHARSET` | 415 | Unsupported `Content-Type` charset (§2) | **Yes** |
 | `UNSUPPORTED_ENCODING` | 415 | Unsupported `Content-Encoding`, including zstd (§2) | **Yes** |
 | `EMAIL_DELIVERY_FAILED` | 503 | The confirmation email for an email change could not be sent (§6a) | **Yes** |
+| `DATABASE_UNAVAILABLE` | 503 | The request needs the database and it cannot be reached (§2) | **Yes** |
 | `RATE_LIMITED` | 429 | Too many sign-in or sign-up attempts from one client (D-9); sent with `Retry-After` | **Yes** |
 | `INTERNAL_ERROR` | 500 | Anything unexpected | **Yes** |
 
@@ -922,3 +947,4 @@ Modules should throw the specific code where one is listed (e.g. `ApiError.confl
 | 2026-10-30 | Behaviour only, no request or response field changed: §6a links are cancelled after a password or email change (500 if that fails), and §8 failed emails log only the purpose and error codes. | Tirth Vaghela |
 | 2026-10-31 | Documentation only, no API change: §6 described as implemented, with its routes listed; §6 no longer says email and password changes do not exist; D-1 to D-11 joined in one table; 405, 429 and 503 added to the §2 status table; §4, D-5 and D-7 ownership follow the final team responsibilities. | Tirth Vaghela |
 | 2026-10-31 | v0.13: malformed requests (§2). New error codes `INVALID_BODY_ENCODING`, `INVALID_URL`, `UNSUPPORTED_CHARSET` and `UNSUPPORTED_ENCODING`, and status 415. These requests previously gave 500 `INTERNAL_ERROR`; existing fields and routes are unchanged. zstd request bodies are not supported and give 415. | Tirth Vaghela |
+| 2026-11-01 | v0.14: new error code `DATABASE_UNAVAILABLE` (503, §2) for requests that need an unreachable database, including database connectivity failures that previously gave 500 `INTERNAL_ERROR`; a database check added to the order of checks on protected routes. `GET /api/health` now pings the database (§5); its response fields are unchanged. §5 no longer says the frontend calls it. | Tirth Vaghela |

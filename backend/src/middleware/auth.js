@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import { User, USER_ROLES } from '../models/User.js';
 import { ApiError } from '../utils/ApiError.js';
 import { verifyToken } from '../utils/token.js';
+import { ensureDatabase } from './database.js';
 
 // Contract §6 token rules. Owner: Swati (first implementation by the integration lead).
 
@@ -9,7 +10,8 @@ const BEARER_PATTERN = /^Bearer\s+(\S+)$/i;
 
 // Requires `Authorization: Bearer <token>`, verifies it, and loads the current user from
 // the database into req.user. Missing, invalid or expired tokens and tokens for users that
-// no longer exist get 401; deactivated accounts get 403 ACCOUNT_DISABLED.
+// no longer exist get 401; deactivated accounts get 403 ACCOUNT_DISABLED. A valid token when the
+// database cannot be used gets 503 DATABASE_UNAVAILABLE: the token is not to blame.
 export async function requireAuth(req, res, next) {
   // Answers to authenticated requests are private: never keep them in browser or proxy caches.
   // Set first, so the 401/403 answers below carry it too.
@@ -29,6 +31,7 @@ export async function requireAuth(req, res, next) {
     throw ApiError.unauthorized('Invalid or expired token');
   }
 
+  await ensureDatabase();
   const user = await User.findById(payload.sub);
   if (!user) {
     throw ApiError.unauthorized('Invalid or expired token');

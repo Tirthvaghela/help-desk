@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { describeDBError } from '../config/db.js';
 import { ApiError } from '../utils/ApiError.js';
 
 export function notFound(req, res, next) {
@@ -84,6 +85,12 @@ function toApiError(err) {
   if (err.code === 11000) {
     const field = Object.keys(err.keyValue || {})[0] || 'value';
     return ApiError.conflict(`${field} already exists`, 'DUPLICATE');
+  }
+  // The database became unreachable while the request was running (a cleared connection pool is a
+  // MongoNetworkError too). The driver's text can name hosts, so it is only logged.
+  if (err instanceof mongoose.mongo.MongoServerSelectionError || err instanceof mongoose.mongo.MongoNetworkError) {
+    console.error(`Database error during a request: ${describeDBError(err)}`);
+    return ApiError.databaseUnavailable();
   }
   return null;
 }

@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 import { env } from './config/env.js';
 import { describeConfig } from './config/envRules.js';
-import { connectDB } from './config/db.js';
+import { connectDB, describeDBError } from './config/db.js';
 import app from './app.js';
 import { checkCategoryIndex } from './utils/categoryNameConflicts.js';
 import { startServer } from './startServer.js';
@@ -20,7 +20,7 @@ for (const line of describeConfig(env)) console.log(line);
 try {
   await connectDB(env.mongodbUri);
 } catch (err) {
-  console.error(`Could not connect to MongoDB: ${err.message}`);
+  console.error(`Could not connect to MongoDB: ${describeDBError(err)}`);
   process.exit(1);
 }
 // Not awaited, and never stops the server: without the index the API still works and still
