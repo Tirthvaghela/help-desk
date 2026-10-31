@@ -45,7 +45,13 @@ export function methodNotAllowed(mounts) {
   };
 }
 
-// Converts known library errors into the standard ApiError shape.
+// Codes zlib gives a gzip, deflate, Brotli or zstd body it cannot decompress. body-parser passes them
+// on with status 400 and no `type`. Only codes caused by the body are listed, so a fault on the server
+// such as running out of memory still gives a 500.
+const DECOMPRESSION_ERROR = /^(?:Z_DATA_ERROR|Z_BUF_ERROR|Z_NEED_DICT|ERR__ERROR_FORMAT_\w+|ZSTD_error_(?:prefix_unknown|version_unsupported|frameParameter_unsupported|frameParameter_windowTooLarge|corruption_detected|checksum_wrong|dictionary_wrong|literals_headerWrong))$/;
+
+// Converts known library errors into the standard ApiError shape. Parser errors are recognised by
+// the markers the parser sets, so a SyntaxError or URIError from application code still gives a 500.
 function toApiError(err) {
   if (err instanceof ApiError) return err;
 
@@ -54,6 +60,19 @@ function toApiError(err) {
   }
   if (err.type === 'entity.too.large') {
     return new ApiError(413, 'PAYLOAD_TOO_LARGE', 'Request body is too large');
+  }
+  if (err.type === 'charset.unsupported') {
+    return new ApiError(415, 'UNSUPPORTED_CHARSET', 'Request body uses an unsupported character set');
+  }
+  if (err.type === 'encoding.unsupported') {
+    return new ApiError(415, 'UNSUPPORTED_ENCODING', 'Request body uses an unsupported content encoding');
+  }
+  if (err.status === 400 && DECOMPRESSION_ERROR.test(err.code)) {
+    return new ApiError(400, 'INVALID_BODY_ENCODING', 'Request body could not be decoded');
+  }
+  // The router sets status 400 on a URL parameter it cannot decode.
+  if (err instanceof URIError && err.status === 400) {
+    return new ApiError(400, 'INVALID_URL', 'Request URL is not correctly encoded');
   }
   if (err instanceof mongoose.Error.ValidationError) {
     const first = Object.values(err.errors)[0];
