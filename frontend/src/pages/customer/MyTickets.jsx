@@ -45,16 +45,28 @@ export default function MyTickets() {
   );
   const { status, data, error, reload } = useApiData(loadPage);
   const counts = useApiData(loadCounts);
+  const [retryingCounts, setRetryingCounts] = useState(false);
 
   const tickets = data?.tickets;
   const totalPages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
   const created = location.state?.created;
   const firstName = user?.name?.split(/\s+/)[0];
   const hasAnyTicket = counts.data ? counts.data.all > 0 : null;
+  // A retry clears the error while it runs; the notice stays up until it has an answer.
+  const countsFailed = counts.status === "error" || (retryingCounts && counts.status === "loading" && !counts.data);
+  // Without counts the filters still work, as long as there is something to filter.
+  const showFilters = hasAnyTicket || (countsFailed && (data?.total > 0 || filter !== "all"));
 
   const chooseFilter = (next) => {
     setFilter(next);
     setPage(1);
+  };
+
+  // Reloads the counts only; the ticket list is loaded separately and keeps what it has.
+  const retryCounts = () => {
+    if (counts.status === "loading") return;
+    setRetryingCounts(true);
+    counts.reload();
   };
 
   return (
@@ -71,7 +83,22 @@ export default function MyTickets() {
 
       <SuccessAlert>{created && `${created} was created. Our team will reply here.`}</SuccessAlert>
 
-      {hasAnyTicket && (
+      {countsFailed && (
+        <ErrorAlert>
+          We couldn't load your ticket counts, so the filter totals are unavailable.{" "}
+          <button
+            type="button"
+            onClick={retryCounts}
+            disabled={counts.status === "loading"}
+            aria-busy={counts.status === "loading"}
+            className="font-semibold underline disabled:opacity-60"
+          >
+            {counts.status === "loading" ? "Retrying…" : "Retry counts"}
+          </button>
+        </ErrorAlert>
+      )}
+
+      {showFilters && (
         <div role="group" aria-label="Filter tickets by status" className="grid grid-cols-2 gap-2 sm:grid-cols-4 sm:gap-4">
           {FILTERS.map((item) => {
             const active = filter === item.status;
@@ -86,7 +113,7 @@ export default function MyTickets() {
                 }`}
               >
                 <span className="block text-[12px] font-medium text-[#5b746c]">{item.label}</span>
-                <span className="mt-1 block text-[24px] font-semibold text-[#172d2a]">{counts.data[item.status]}</span>
+                <span className="mt-1 block text-[24px] font-semibold text-[#172d2a]">{counts.data?.[item.status] ?? "—"}</span>
               </button>
             );
           })}
