@@ -4,7 +4,7 @@ What has been tested, how, and with what result, as of **31 October 2026**. It r
 
 This update began from the `main` branch at `85511b4` **plus the uncommitted working tree** of that date: the admin ticket conversation (P1-1), the admin priority control (P2-1), the email-change status after a failed reload (P2-2) and the malformed-request error responses (P2-3). All four have since been merged. The last local backend and frontend runs used `75cd711` plus the uncommitted zstd refusal, which is the code then committed as `b6eed94` and merged through PR #16 as `cbaf2fd`. Their working tree also held other uncommitted, non-code files, so it was not a clean checkout.
 
-**Fresh and historical results.** The backend and frontend suites and the build in §1 and §2 were re-run locally on Windows on 31 October 2026, after the last change to the code. The GitHub Actions results in §2 ran on Linux on 30 and 31 October 2026 and cover committed code only. Runs from PR #15 onward cover P2-2. The PR #16 runs cover P2-3: `41206955716` failed on one zstd test, and `41209682682` and `41209956284` passed with the final code. Everything in §3 and §4 is **historical**: each ran once against the code of its day and was not repeated for this update. §5 lists user-reported manual checks, which were not independently verified.
+**Fresh and historical results.** The backend and frontend suites and the build in §1 and §2 were re-run locally on Windows on 31 October 2026, after the last change to the code. The GitHub Actions results in §2 ran on Linux on 30 and 31 October 2026 and cover committed code only. Runs from PR #15 onward cover P2-2. The PR #16 runs cover P2-3: `41206955716` failed on one zstd test, and `41209682682` and `41209956284` passed with the final code. Run `41213628727` passed at `b12f970`, the PR #17 merge commit. PR #17 changed only documentation. Everything in §3 and §4 is **historical**: each ran once against the code of its day and was not repeated for this update. §5 lists user-reported manual checks, which were not independently verified.
 
 ## Contents
 
@@ -36,7 +36,7 @@ This update began from the `main` branch at `85511b4` **plus the uncommitted wor
 | Backend automated tests (local Windows, Node 22.14.0, 31 Oct, the code committed as `b6eed94`) | **616 tests: 615 passed, 0 failed, 1 skipped** (123 suites), MongoDB required (`REQUIRE_TEST_DB=1`). Skip reason as reported by the runner: `SIGTERM cannot be delivered on Windows` |
 | Frontend tests (local Windows, Node 22.14.0, 31 Oct, the code committed as `b6eed94`) | **417 passed, 0 failed, 0 skipped** (83 suites) |
 | Frontend production build (local Windows, Node 22.14.0, 31 Oct, the code committed as `b6eed94`) | **Succeeds** (`vite build`, 83 modules) |
-| GitHub Actions (Linux, Node 22.23.4, 31 Oct, latest run `41209956284` at `cbaf2fd`, the merge of PR #16) | **Success.** Backend **623 tests: 623 passed, 0 failed, 0 skipped** (123 suites), including the real `SIGTERM` test; frontend **417 passed, 0 failed, 0 skipped** (83 suites); build step succeeded. Includes P2-2 and P2-3 |
+| GitHub Actions (Linux, Node 22.23.4, 31 Oct, run `41213628727` at `b12f970`, the PR #17 merge commit) | **Success.** Backend **623 tests: 623 passed, 0 failed, 0 skipped** (123 suites), including the real `SIGTERM` test; frontend **417 passed, 0 failed, 0 skipped** (83 suites); build step succeeded. Includes P2-2 and P2-3 |
 | Real-browser checks (historical) | 15 scripted workflows on an isolated local stack; results in §4. One defect found (paging) and fixed, then re-checked. SLA badges were checked first with simulated `dueAt`, then against the real backend; analytics and customer categories against the real backend. **None of them covers P1-1, P2-1 or P2-2** |
 | Manual checks (user-reported) | One real email received and categories visible on the real frontend; §5 |
 | Full real-mailbox tests, deployed app, other browsers | **Not verified** (§7) |
@@ -101,11 +101,12 @@ The production build (`npm run build`) succeeds: 83 modules, last local run 31 O
 
 ### Continuous integration (Linux)
 
-`.github/workflows/ci.yml` runs both suites on Linux for every pull request into `main` and every push to `main` (backend with a MongoDB 7 service and `REQUIRE_TEST_DB=1`; frontend tests and build). Runs read from the GitHub Actions job logs, most recent first. PR run `41209682682` tested the PR #16 branch, and merge run `41209956284` tested the merge commit. Run `41206955716` failed and is kept because it found the zstd defect. The older runs, from PR #15 back, are historical:
+`.github/workflows/ci.yml` runs both suites on Linux for every pull request into `main` and every push to `main` (backend with a MongoDB 7 service and `REQUIRE_TEST_DB=1`; frontend tests and build). Runs read from the GitHub Actions job logs, most recent first. Merge run `41213628727` tested the merge of PR #17. PR run `41209682682` tested the PR #16 branch, and merge run `41209956284` tested that PR's merge commit. Run `41206955716` failed and is kept because it found the zstd defect. The older runs, from PR #15 back, are historical:
 
 | Run | Commit | Started (UTC) | Trigger | Backend tests job | Frontend tests and build job |
 | --- | --- | --- | --- | --- | --- |
-| `41209956284` | `cbaf2fd` (merge of PR #16, current verified `main`) | 31 Oct 2026, 14:24 | Push to `main` | Success: 623 tests, 123 suites, 623 passed, 0 failed, 0 skipped | Success: 417 tests, 83 suites, 417 passed, 0 failed, 0 skipped; build step succeeded |
+| `41213628727` | `b12f970` (PR #17 merge commit) | 31 Oct 2026, 15:11 | Push to `main` | Success: 623 tests, 123 suites, 623 passed, 0 failed, 0 skipped | Success: 417 tests, 83 suites, 417 passed, 0 failed, 0 skipped; build step succeeded |
+| `41209956284` | `cbaf2fd` (merge of PR #16) | 31 Oct 2026, 14:24 | Push to `main` | Success: 623 tests, 123 suites, 623 passed, 0 failed, 0 skipped | Success: 417 tests, 83 suites, 417 passed, 0 failed, 0 skipped; build step succeeded |
 | `41209682682` | `b6eed94` (PR #16 branch) | 31 Oct 2026, 14:20 | Pull request | Success: 623 tests, 123 suites, 623 passed, 0 failed, 0 skipped | Success: 417 tests, 83 suites, 417 passed, 0 failed, 0 skipped; build step succeeded |
 | `41206955716` | `75cd711` (PR #16 branch) | 31 Oct 2026, 13:44 | Pull request | **Failure:** 603 tests, 122 suites, 602 passed, 1 failed, 0 skipped. A truncated zstd body returned 200 instead of 400 | Success: 417 tests, 83 suites, 417 passed, 0 failed, 0 skipped; build step succeeded |
 | `41202057252` | `0f351b3` (merge of PR #15) | 31 Oct 2026, 12:39 | Push to `main` | Success: 554 tests, 120 suites, 554 passed, 0 failed, 0 skipped | Success: 417 tests, 83 suites, 417 passed, 0 failed, 0 skipped; build step succeeded |
@@ -114,7 +115,7 @@ The production build (`npm run build`) succeeds: 83 modules, last local run 31 O
 | `41098540772` | `85511b4` (merge of PR #12) | 30 Oct 2026, 17:24 | Push to `main` | Success: 554 tests, 120 suites, 554 passed, 0 failed, 0 skipped | Success: 155 tests, 36 suites, 155 passed, 0 failed, 0 skipped; build step succeeded |
 | `41098190993` | `1531eb3` (PR #12 branch) | 30 Oct 2026, 17:22 | Pull request | Success: 554 tests, 120 suites, 554 passed, 0 failed, 0 skipped | Success: 155 tests, 36 suites, 155 passed, 0 failed, 0 skipped; build step succeeded |
 
-The real `SIGTERM` test ran and passed on Linux in all eight runs. Runs `41202057252` and `41209956284` are confirmed to have tested the merge commits themselves: each run's head commit and both jobs report the merge commit, not the earlier PR commit.
+The real `SIGTERM` test ran and passed on Linux in all nine runs. Runs `41202057252`, `41209956284` and `41213628727` are confirmed to have tested the merge commits themselves: each run's head commit and both jobs report the merge commit, not the earlier PR commit.
 
 **Local Windows and Linux CI are different evidence.** CI ran committed code on Linux, where the `SIGTERM` test runs; the local runs were on Windows, where it is skipped. On Node 22.23.4 the backend has 623 tests in both places: 623 passed in CI, and locally 622 passed with 1 skipped. On Node 22.14.0 it has 616, because 7 tests need zstd in the runtime. The frontend total is 417 in both places, because P2-3 changes only the backend. The runs before PR #15 are historical, with lower frontend totals.
 
@@ -236,4 +237,4 @@ npm test
 npm run build
 ```
 
-Expected on Windows at `cbaf2fd` with Node 22.14.0: backend 615 passed, 0 failed, 1 skipped; frontend 417 passed, 0 failed; the build ends with `built in …`. With Node 22.23.4 on Windows the backend gives 622 passed, 0 failed, 1 skipped, because the count depends on whether the runtime has zstd (§2). On Linux the `SIGTERM` test is not skipped; the latest CI run listed in §2, at `cbaf2fd`, gave backend 623 passed, 0 skipped, and frontend 417 passed.
+Expected on Windows at `cbaf2fd` with Node 22.14.0: backend 615 passed, 0 failed, 1 skipped; frontend 417 passed, 0 failed; the build ends with `built in …`. With Node 22.23.4 on Windows the backend gives 622 passed, 0 failed, 1 skipped, because the count depends on whether the runtime has zstd (§2). On Linux the `SIGTERM` test is not skipped; CI run `41213628727` at `b12f970`, the PR #17 merge commit, gave backend 623 passed, 0 skipped, and frontend 417 passed.
