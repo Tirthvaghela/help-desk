@@ -298,3 +298,43 @@ describe('TRUST_PROXY', () => {
     }
   });
 });
+
+describe('EMAIL_TRANSPORT=resend', () => {
+  const FAKE_KEY = 're_test_NOT_A_REAL_KEY_123';
+  const read = (extra) => readEnv({ ...base, MONGODB_URI: 'mongodb://127.0.0.1/helpdesk', EMAIL_TRANSPORT: 'resend', ...extra });
+
+  it('needs RESEND_API_KEY and EMAIL_FROM, naming only the missing settings', () => {
+    const none = read({});
+    assert.equal(none.errors.length, 1);
+    assert.match(none.errors[0], /^EMAIL_TRANSPORT=resend needs: RESEND_API_KEY, EMAIL_FROM/);
+    assert.match(read({ EMAIL_FROM: 'Help Desk <hd@example.com>' }).errors[0], /needs: RESEND_API_KEY \(/);
+    const noFrom = read({ RESEND_API_KEY: FAKE_KEY });
+    assert.match(noFrom.errors[0], /needs: EMAIL_FROM \(/);
+    assert.ok(!noFrom.errors.join('\n').includes(FAKE_KEY), 'the key is never repeated');
+  });
+
+  it('is accepted in production, and the key is kept for the email service', () => {
+    const { env, errors } = read({ NODE_ENV: 'production', RESEND_API_KEY: FAKE_KEY, EMAIL_FROM: 'Help Desk <hd@example.com>' });
+    assert.deepEqual(errors, []);
+    assert.equal(env.email.transport, 'resend');
+    assert.equal(env.email.from, 'Help Desk <hd@example.com>');
+    assert.equal(env.email.resend.apiKey, FAKE_KEY);
+  });
+
+  it('the startup summary says resend and never shows the key', () => {
+    const { env } = read({ RESEND_API_KEY: FAKE_KEY, EMAIL_FROM: 'Help Desk <hd@example.com>' });
+    const text = describeConfig(env).join('\n');
+    assert.match(text, /Email: resend \(HTTP API\) — real emails will be sent/);
+    assert.ok(!text.includes(FAKE_KEY));
+    assert.ok(!text.includes('re_'));
+  });
+
+  it('existing transports are unchanged; production still refuses outbox and memory', () => {
+    assert.match(read({ EMAIL_TRANSPORT: 'smtp' }).errors[0], /^EMAIL_TRANSPORT=smtp needs: SMTP_HOST, EMAIL_FROM/);
+    for (const transport of ['outbox', 'memory', 'disabled']) assert.deepEqual(read({ EMAIL_TRANSPORT: transport }).errors, [], transport);
+    for (const transport of ['outbox', 'memory']) {
+      assert.match(read({ EMAIL_TRANSPORT: transport, NODE_ENV: 'production' }).errors.join('\n'), /is for development and tests only/, transport);
+    }
+    assert.match(read({ EMAIL_TRANSPORT: 'sendgrid' }).errors[0], /^EMAIL_TRANSPORT must be one of: smtp, resend, outbox, memory, disabled/);
+  });
+});

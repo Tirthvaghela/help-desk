@@ -122,11 +122,12 @@ function readTrustProxy(source, errors) {
 }
 
 // Startup lines for the log: which database and email transport are in use. Never includes
-// the connection string, credentials or SMTP passwords.
+// the connection string, credentials, SMTP passwords or the Resend API key.
 export function describeConfig(env) {
   const { email } = env;
   const transport = {
     smtp: `smtp via ${email.smtp.host ?? '(no host)'}:${email.smtp.port} — real emails will be sent`,
+    resend: 'resend (HTTP API) — real emails will be sent',
     outbox: `outbox → ${email.outboxDir ?? 'backend/.outbox'} (nothing is sent)`,
     memory: 'memory (tests; nothing is sent)',
     disabled: 'disabled (no emails; password reset cannot work)',
@@ -200,6 +201,9 @@ export function readEnv(source) {
     // Origins allowed by CORS: CLIENT_URL's first, then any from CORS_ORIGINS.
     corsOrigins,
     nodeEnv,
+    // Running on Vercel (it sets VERCEL): used to report background work that Vercel was not asked
+    // to wait for (services/email.js).
+    onVercel: Boolean(source.VERCEL),
     authRateLimit: {
       max: readNonNegativeInteger(source, 'AUTH_RATE_LIMIT_MAX', limitsOff ? 0 : DEFAULT_RATE_LIMIT_MAX, errors),
       windowMs,
@@ -218,7 +222,7 @@ export function readEnv(source) {
 }
 
 const DEFAULT_SENSITIVE_RATE_LIMIT_MAX = 5;
-export const EMAIL_TRANSPORTS = Object.freeze(['smtp', 'outbox', 'memory', 'disabled']);
+export const EMAIL_TRANSPORTS = Object.freeze(['smtp', 'resend', 'outbox', 'memory', 'disabled']);
 
 function readPositive(source, name, fallback, errors) {
   const value = readNonNegativeInteger(source, name, fallback, errors);
@@ -229,9 +233,12 @@ function readPositive(source, name, fallback, errors) {
   return value;
 }
 
-// EMAIL_TRANSPORT: smtp (real delivery), outbox (development: writes emails to
-// backend/.outbox), memory (tests), disabled (nothing is sent). Defaults: test → memory,
-// production → smtp, otherwise outbox. Production must not use outbox or memory.
+// EMAIL_TRANSPORT: smtp (real delivery through any SMTP server), resend (real delivery through the
+// Resend HTTP API), outbox (development: writes emails to backend/.outbox), memory (tests),
+// disabled (nothing is sent). Defaults: test → memory, production → smtp, otherwise outbox.
+// Production must not use outbox or memory. Messages name settings, never their values.
+const REQUIRED_EMAIL_SETTINGS = Object.freeze({ smtp: ['SMTP_HOST', 'EMAIL_FROM'], resend: ['RESEND_API_KEY', 'EMAIL_FROM'] });
+
 function readEmailConfig(source, nodeEnv, errors) {
   const fallback = nodeEnv === 'test' ? 'memory' : nodeEnv === 'production' ? 'smtp' : 'outbox';
   const transport = source.EMAIL_TRANSPORT || fallback;
@@ -239,20 +246,23 @@ function readEmailConfig(source, nodeEnv, errors) {
     errors.push(`EMAIL_TRANSPORT must be one of: ${EMAIL_TRANSPORTS.join(', ')}`);
   }
   if (nodeEnv === 'production' && ['outbox', 'memory'].includes(transport)) {
-    errors.push(`EMAIL_TRANSPORT=${transport} is for development and tests only; use smtp (or disabled) in production`);
+    errors.push(`EMAIL_TRANSPORT=${transport} is for development and tests only; use smtp or resend (or disabled) in production`);
   }
 
-  const from = source.EMAIL_FROM || (transport === 'smtp' ? '' : 'Help Desk <no-reply@helpdesk.local>');
-  if (transport === 'smtp') {
-    const missing = ['SMTP_HOST', 'EMAIL_FROM'].filter((key) => !source[key]);
+  const sendsRealEmail = Boolean(REQUIRED_EMAIL_SETTINGS[transport]);
+  const from = source.EMAIL_FROM || (sendsRealEmail ? '' : 'Help Desk <no-reply@helpdesk.local>');
+  if (sendsRealEmail) {
+    const missing = REQUIRED_EMAIL_SETTINGS[transport].filter((key) => !source[key]);
     if (missing.length > 0) {
-      errors.push(`EMAIL_TRANSPORT=smtp needs: ${missing.join(', ')} (or set EMAIL_TRANSPORT=disabled)`);
+      errors.push(`EMAIL_TRANSPORT=${transport} needs: ${missing.join(', ')} (or set EMAIL_TRANSPORT=disabled)`);
     }
   }
 
   return {
     transport,
     from,
+    // resend only. A secret: never logged or shown in messages.
+    resend: { apiKey: source.RESEND_API_KEY || undefined },
     // outbox only; default backend/.outbox (git-ignored)
     outboxDir: source.EMAIL_OUTBOX_DIR || null,
     smtp: {
