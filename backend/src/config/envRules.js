@@ -40,40 +40,68 @@ export function databaseNameOf(uri) {
   }
 }
 
+// A frontend origin: http(s) scheme, host and port only. A trailing "/" is allowed and removed
+// ("http://localhost:5173/" → "http://localhost:5173"); a path, query, fragment, credentials or
+// "*" in the host is refused. Returns the origin, or null when invalid.
+function parseOrigin(value) {
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+  const originOnly = (url.pathname === '/' || url.pathname === '') && !url.search && !url.hash && !url.username && !url.password;
+  if (!['http:', 'https:'].includes(url.protocol) || !originOnly || url.hostname.includes('*')) return null;
+  return url.origin;
+}
+
+// CLIENT_URL: the frontend origin. Required; checked by readEnv.
+function readClientOrigin(clientUrl, errors) {
+  if (!clientUrl) return null;
+  const origin = parseOrigin(clientUrl);
+  if (!origin) {
+    errors.push('CLIENT_URL must be the frontend origin only (http(s) scheme, host and port, no path), e.g. http://localhost:5173');
+  }
+  return origin;
+}
+
 // CORS_ORIGINS: optional comma-separated extra frontend origins (exact http(s) origins, no
 // paths or wildcards), e.g. "http://localhost:5174,http://127.0.0.1:5173". CLIENT_URL's origin
-// is always allowed and stays the only base for links in emails.
-function readCorsOrigins(source, clientUrl, errors) {
-  const origins = [];
-  const add = (value, name) => {
-    let url;
-    try {
-      url = new URL(value);
-    } catch {
-      errors.push(`${name} must contain full http(s) origins, e.g. http://localhost:5174 (got "${value}")`);
-      return;
-    }
-    if (!['http:', 'https:'].includes(url.protocol) || (url.pathname !== '/' && url.pathname !== '') || url.search || url.hash || url.username) {
-      errors.push(`${name} must contain origins only (scheme, host and port, no path), got "${value}"`);
-      return;
-    }
-    if (!origins.includes(url.origin)) origins.push(url.origin);
-  };
-  if (clientUrl) {
-    try {
-      origins.push(new URL(clientUrl).origin);
-    } catch {
-      // Reported by the CLIENT_URL check.
-    }
-  }
+// is always allowed, always first, and stays the only base for links in emails.
+function readCorsOrigins(source, clientOrigin, errors) {
+  const origins = clientOrigin ? [clientOrigin] : [];
   for (const value of String(source.CORS_ORIGINS ?? '').split(',').map((part) => part.trim()).filter(Boolean)) {
     if (value === '*') {
       errors.push('CORS_ORIGINS cannot be "*": list each allowed frontend origin');
       continue;
     }
-    add(value, 'CORS_ORIGINS');
+    const origin = parseOrigin(value);
+    if (!origin) {
+      errors.push(`CORS_ORIGINS must contain origins only (http(s) scheme, host and port, no path or wildcard), got "${value}"`);
+      continue;
+    }
+    if (!origins.includes(origin)) origins.push(origin);
   }
   return origins;
+}
+
+// JWT_EXPIRES_IN: login token lifetime as a whole number and one unit, s, m, h or d ("30m", "12h",
+// "1d"), from 5 minutes to 30 days. Default 1d. A bare number is refused because jsonwebtoken
+// reads it as milliseconds ("3600" would be 3.6 seconds).
+export const JWT_EXPIRY_LIMITS_SECONDS = Object.freeze({ min: 5 * 60, max: 30 * 24 * 60 * 60 });
+const JWT_EXPIRY_UNIT_SECONDS = Object.freeze({ s: 1, m: 60, h: 60 * 60, d: 24 * 60 * 60 });
+const DEFAULT_JWT_EXPIRES_IN = '1d';
+
+function readJwtExpiresIn(source, errors) {
+  const raw = source.JWT_EXPIRES_IN;
+  if (raw === undefined || raw === '') return DEFAULT_JWT_EXPIRES_IN;
+  const match = /^([1-9]\d{0,6})([smhd])$/.exec(raw);
+  const seconds = match ? Number(match[1]) * JWT_EXPIRY_UNIT_SECONDS[match[2]] : NaN;
+  if (!(seconds >= JWT_EXPIRY_LIMITS_SECONDS.min && seconds <= JWT_EXPIRY_LIMITS_SECONDS.max)) {
+    errors.push(`JWT_EXPIRES_IN must be a whole number with a unit s, m, h or d, from 5m to 30d (e.g. 12h or 1d), got "${raw}"`);
+    return DEFAULT_JWT_EXPIRES_IN;
+  }
+  return raw;
 }
 
 // Startup lines for the log: which database and email transport are in use. Never includes
@@ -105,6 +133,11 @@ export function readEnv(source) {
   }
 
   const nodeEnv = source.NODE_ENV || 'development';
+  // Vercel sets VERCEL. Without NODE_ENV=production the production checks would be skipped
+  // silently (short secrets accepted, emails written to files instead of sent), so refuse.
+  if (source.VERCEL && nodeEnv !== 'production') {
+    errors.push('NODE_ENV must be "production" on Vercel (VERCEL is set): add NODE_ENV=production to the project\'s environment variables');
+  }
   const jwtSecret = source.JWT_SECRET;
   if (nodeEnv === 'production' && jwtSecret) {
     if (jwtSecret.length < MIN_PRODUCTION_JWT_SECRET_LENGTH) {
@@ -115,14 +148,7 @@ export function readEnv(source) {
   }
 
   const clientUrl = source.CLIENT_URL;
-  if (clientUrl) {
-    try {
-      const url = new URL(clientUrl);
-      if (!['http:', 'https:'].includes(url.protocol)) throw new Error('protocol');
-    } catch {
-      errors.push('CLIENT_URL must be a full http(s) URL, e.g. http://localhost:5173');
-    }
-  }
+  const clientOrigin = readClientOrigin(clientUrl, errors);
 
   // Without a database in the URI, MongoDB silently uses "test": easy to confuse with test data
   // and different from what teammates expect. Refused in production, warned about elsewhere.
@@ -132,7 +158,7 @@ export function readEnv(source) {
     if (nodeEnv === 'production') errors.push(message);
     else warnings.push(message);
   }
-  const corsOrigins = readCorsOrigins(source, clientUrl, errors);
+  const corsOrigins = readCorsOrigins(source, clientOrigin, errors);
 
   const email = readEmailConfig(source, nodeEnv, errors);
   // Resolution targets per priority (SLA_HOURS_HIGH / _MEDIUM / _LOW); defaults 24 / 72 / 168.
@@ -147,11 +173,12 @@ export function readEnv(source) {
     mongodbDatabase: mongodbDatabase || 'test',
     mongodbDatabaseExplicit: Boolean(mongodbDatabase),
     jwtSecret,
-    // Token lifetime (contract C-3, still open); any value jsonwebtoken accepts, e.g. "1d", "12h".
-    jwtExpiresIn: source.JWT_EXPIRES_IN || '1d',
-    // The origin used to build links in emails (never the request's Host header).
-    clientUrl,
-    // Origins allowed by CORS: CLIENT_URL's, then any from CORS_ORIGINS.
+    // Token lifetime (contract C-3, still open); see readJwtExpiresIn for the accepted format.
+    jwtExpiresIn: readJwtExpiresIn(source, errors),
+    // The frontend origin, without a trailing "/": the base for links in emails (never the
+    // request's Host header).
+    clientUrl: clientOrigin ?? clientUrl,
+    // Origins allowed by CORS: CLIENT_URL's first, then any from CORS_ORIGINS.
     corsOrigins,
     nodeEnv,
     authRateLimit: {

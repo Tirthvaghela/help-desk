@@ -47,9 +47,10 @@ const app = express();
 app.disable('x-powered-by');
 
 app.use(securityHeaders({ hsts: env.nodeEnv === 'production' }));
-// One origin: answered as before (that origin on every response). Several (CORS_ORIGINS): only a
-// listed request Origin is echoed back; any other gets no Access-Control-Allow-Origin.
-app.use(cors({ origin: env.corsOrigins.length > 1 ? env.corsOrigins : env.clientUrl }));
+// The normalised origins from config/envRules.js. One origin: that origin on every response, as
+// before. Several (CORS_ORIGINS): only a listed request Origin is echoed back; any other gets no
+// Access-Control-Allow-Origin.
+app.use(cors({ origin: env.corsOrigins.length > 1 ? env.corsOrigins : env.corsOrigins[0] }));
 app.use(rejectZstdBodies);
 app.use(express.json({ limit: '100kb' }));
 if (env.nodeEnv !== 'test') {
