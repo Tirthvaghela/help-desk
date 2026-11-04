@@ -111,7 +111,7 @@ Option (B), an httpOnly cookie, was not chosen.
 ### Base URL
 
 - Local: `http://localhost:4000`
-- Production (planned, **not deployed yet**): the backend's Vercel URL, e.g. `https://<backend>.vercel.app`. It will be recorded here once deployed.
+- Production (live on Vercel): `https://help-desk-backend-nine.vercel.app`, used by the frontend at `https://help-desk-web-app.vercel.app`.
 - Frontend reads it from `VITE_API_URL`.
 - All routes start with `/api`.
 
@@ -500,7 +500,7 @@ Public (the link may be opened on any device). Request: `{ "token": "…" }`. **
 
 ### `POST /api/auth/forgot-password`
 
-Public. Request: `{ "email": "…" }`. **Always 200** with the same `{ "message": "If an account exists for that email, …" }`, whether the account exists, is deactivated or not; the account lookup and the email (if any) happen after the response, as tracked background work (a server shutdown waits up to 5 seconds for it; on Vercel it is passed to `waitUntil`, not yet tested there). A failure is only logged and never changes the response. At most one reset email per account per minute. Errors: **400** `VALIDATION_ERROR` (not an email address) · **429**.
+Public. Request: `{ "email": "…" }`. **Always 200** with the same `{ "message": "If an account exists for that email, …" }`, whether the account exists, is deactivated or not; the account lookup and the email (if any) happen after the response, as tracked background work (a server shutdown waits up to 5 seconds for it; on Vercel it is passed to `waitUntil`). A failure is only logged and never changes the response. At most one reset email per account per minute. Errors: **400** `VALIDATION_ERROR` (not an email address) · **429**.
 
 ### `POST /api/auth/reset-password/check` and `POST /api/auth/reset-password`
 
@@ -950,3 +950,4 @@ Modules should throw the specific code where one is listed (e.g. `ApiError.confl
 | 2026-10-31 | v0.13: malformed requests (§2). New error codes `INVALID_BODY_ENCODING`, `INVALID_URL`, `UNSUPPORTED_CHARSET` and `UNSUPPORTED_ENCODING`, and status 415. These requests previously gave 500 `INTERNAL_ERROR`; existing fields and routes are unchanged. zstd request bodies are not supported and give 415. | Tirth Vaghela |
 | 2026-11-01 | v0.14: new error code `DATABASE_UNAVAILABLE` (503, §2) for requests that need an unreachable database, including database connectivity failures that previously gave 500 `INTERNAL_ERROR`; a database check added to the order of checks on protected routes. `GET /api/health` now pings the database (§5); its response fields are unchanged. §5 no longer says the frontend calls it. | Tirth Vaghela |
 | 2026-11-05 | Documentation only, no request or response change: §6a forgot-password says its lookup and email run as tracked background work after the response (kept running on Vercel with `waitUntil`, not yet tested there); §8 status emails note what a Resend failure logs (`EMAIL_TRANSPORT=resend`); §2 lists the planned production base URL (Vercel, not deployed yet). | Tirth Vaghela |
+| 2026-11-05 | Documentation only, no request or response change: §2 records the live production base URL (`https://help-desk-backend-nine.vercel.app`); §6a forgot-password no longer says `waitUntil` is untested on Vercel. | Tirth Vaghela |

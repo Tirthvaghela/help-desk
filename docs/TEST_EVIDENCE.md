@@ -2,6 +2,8 @@
 
 What has been tested, how, and with what result, as of **31 October 2026**. It records only checks that were actually run; anything not run is listed under [Not verified yet](#7-not-verified-yet).
 
+**Live deployment, 5 November 2026.** The app is live on Vercel (frontend <https://help-desk-web-app.vercel.app/>, API <https://help-desk-backend-nine.vercel.app/>), with MongoDB Atlas and Resend. The checks done on it so far are in [§5](#5-manual-and-live-deployment-checks): read-only HTTP requests, and flows reported by the project owner. The automated results in §1 and §2 are from 31 October and were not re-run for this update.
+
 This update began from the `main` branch at `85511b4` **plus the uncommitted working tree** of that date: the admin ticket conversation (P1-1), the admin priority control (P2-1), the email-change status after a failed reload (P2-2) and the malformed-request error responses (P2-3). All four have since been merged. The last local backend and frontend runs used `75cd711` plus the uncommitted zstd refusal, which is the code then committed as `b6eed94` and merged through PR #16 as `cbaf2fd`. Their working tree also held other uncommitted, non-code files, so it was not a clean checkout.
 
 **Fresh and historical results.** The backend and frontend suites and the build in §1 and §2 were re-run locally on Windows on 31 October 2026, after the last change to the code. The GitHub Actions results in §2 ran on Linux on 30 and 31 October 2026 and cover committed code only. Runs from PR #15 onward cover P2-2. The PR #16 runs cover P2-3: `41206955716` failed on one zstd test, and `41209682682` and `41209956284` passed with the final code. Run `41213628727` passed at `b12f970`, the PR #17 merge commit. PR #17 changed only documentation. Everything in §3 and §4 is **historical**: each ran once against the code of its day and was not repeated for this update. §5 lists user-reported manual checks, which were not independently verified.
@@ -12,7 +14,7 @@ This update began from the `main` branch at `85511b4` **plus the uncommitted wor
 2. [Automated tests (in the repository)](#2-automated-tests-in-the-repository)
 3. [API-level QA (outside the repository)](#3-api-level-qa-outside-the-repository-historical)
 4. [Real-browser checks](#4-real-browser-checks-historical)
-5. [Manual checks reported by the user](#5-manual-checks-reported-by-the-user)
+5. [Manual and live-deployment checks](#5-manual-and-live-deployment-checks)
 6. [Log privacy](#6-log-privacy)
 7. [Not verified yet](#7-not-verified-yet)
 8. [How to reproduce](#8-how-to-reproduce)
@@ -39,7 +41,8 @@ This update began from the `main` branch at `85511b4` **plus the uncommitted wor
 | GitHub Actions (Linux, Node 22.23.4, 31 Oct, run `41213628727` at `b12f970`, the PR #17 merge commit) | **Success.** Backend **623 tests: 623 passed, 0 failed, 0 skipped** (123 suites), including the real `SIGTERM` test; frontend **417 passed, 0 failed, 0 skipped** (83 suites); build step succeeded. Includes P2-2 and P2-3 |
 | Real-browser checks (historical) | 15 scripted workflows on an isolated local stack; results in §4. One defect found (paging) and fixed, then re-checked. SLA badges were checked first with simulated `dueAt`, then against the real backend; analytics and customer categories against the real backend. **None of them covers P1-1, P2-1 or P2-2** |
 | Manual checks (user-reported) | One real email received and categories visible on the real frontend; §5 |
-| Full real-mailbox tests, deployed app, other browsers | **Not verified** (§7) |
+| Live deployment (Vercel, 5 Nov) | **Read-only HTTP checks passed:** health 200 with the database connected, CORS for the live frontend, security headers, CSP naming the API, page refreshes. **Reported by the project owner:** password reset (email, link, sign-in with the new password), email-change confirmation and ticket status emails work. §5 |
+| Full workflow on the live deployment, other browsers | **Not verified** (§7) |
 | Log privacy | Failed emails and request logs fixed and tested with simulated errors, not a live SMTP server; the remaining gaps are in §6 |
 
 ## 2. Automated tests (in the repository)
@@ -168,7 +171,34 @@ Scripted workflows in headless Chrome against an isolated local stack: frontend 
 
 Duplicate-submission protection (C-3) has **not** been checked in a browser; it is covered by the API tests in §2. The same is true of the admin ticket conversation (P1-1), the admin priority control (P2-1) and the email-change status fix (P2-2), which are covered only by the automated tests in §2.
 
-## 5. Manual checks reported by the user
+## 5. Manual and live-deployment checks
+
+### Live deployment: read-only HTTP checks (5 November 2026)
+
+Run with `curl` from the development machine against the live URLs. No sign-in, no form submitted, nothing written, no email sent.
+
+| Check | Result |
+| --- | --- |
+| `GET https://help-desk-backend-nine.vercel.app/api/health` | **200** `{"status":"ok","database":"connected","uptimeSeconds":…,"timestamp":…}` |
+| CORS preflight (`OPTIONS /api/auth/login`, `POST`, `content-type`) from `https://help-desk-web-app.vercel.app` | **204**, `Access-Control-Allow-Origin: https://help-desk-web-app.vercel.app`, all methods the API uses allowed. A preflight from another origin also gets 204 but with the live frontend's origin in that header, so a browser on another site refuses the response |
+| API security headers on `/api/health` | `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, and the app's own `Strict-Transport-Security: max-age=15552000`. The app sends that only when it sees HTTPS through a trusted proxy, which indicates `TRUST_PROXY` is set; its value was not checked |
+| Frontend `index.html` | **200**; the built CSP has `connect-src 'self' https://help-desk-backend-nine.vercel.app`, plus the Google Fonts sources. The `vercel.json` headers are present (`X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`, `frame-ancestors 'none'`) |
+| Page refreshes: `/tickets`, `/agent/dashboard`, `/admin/dashboard?ticket=x`, `/reset-password` | **200**, each the app's `index.html` |
+| A missing file under `/assets/` | **404**, not `index.html` |
+| `/favicon.svg` | **200**, `image/svg+xml` |
+
+### Live deployment: reported by the project owner (5 November 2026)
+
+Not run or independently verified by these checks. The deployed commit was not recorded.
+
+| Check | Reported result | What remains unverified |
+| --- | --- | --- |
+| Backend and frontend deployed; health check | Healthy, database connected | Also checked above |
+| Password reset through Resend | Email received from `support@tirthvaghela.in`; the reset link works; signing in with the new password works | The runtime logs (no "no Vercel request context" warning); delivery while nothing else was using the site; appearance in mail clients |
+| Email-change confirmation | Email received and the confirmation works | As above |
+| Ticket status notification emails | Received | Which status changes were tried |
+
+### Earlier manual checks
 
 Reported by the project owner. They were not run or independently verified by these checks.
 
@@ -200,11 +230,14 @@ Checked by `logPrivacy` with simulated errors. It has **not** been seen with a l
 
 | Item | Why |
 | --- | --- |
-| Full real-mailbox tests: Open → In Progress, In Progress → Resolved, password reset | Deliberately skipped by the project owner's decision. Automated tests use only the in-memory and outbox transports; the SMTP timeouts are checked as configuration, not against a real server. One real email was reported received (§5) |
+| A scripted real-mailbox suite: Open → In Progress, In Progress → Resolved, password reset | Not run (deliberately skipped by the project owner's decision). Automated tests use only the in-memory and outbox transports; the SMTP timeouts are checked as configuration, not against a real server. On the live deployment, password reset, email-change and ticket status emails were reported received through Resend (§5), without a record of which status changes were tried |
 | The redesigned emails in a real mail client | Checked in tests and in a Chrome preview only; rendering in Gmail, Outlook and Apple Mail not checked |
-| Log privacy with a real SMTP rejection | Simulated errors only (§6); no real email was sent |
-| Deployed application: HTTPS, HSTS, CORS for the real frontend address, health check on the host, logs | Not deployed yet |
-| Running behind a hosting proxy (client IP for rate limits, HTTPS detection) | Needs a host; see README "Deployment readiness" |
+| Log privacy with a real SMTP or Resend rejection | Simulated errors only (§6). Real emails have been sent on the live deployment, but no real failure has been observed |
+| Live deployment: runtime logs | Not read. Includes the "Background email: no Vercel request context" warning and Resend failures (README "Not yet verified on Vercel"). HTTPS, HSTS, CORS for the live frontend and the health check were checked (§5) |
+| Live deployment: full workflow in a browser | Not recorded: customer sign-up and ticket creation, agent claim and reply, admin pages and reports, refreshing signed-in pages, console free of CORS and CSP errors. Only the account-email flows were reported (§5) |
+| Live deployment: build details | The Node.js version in both Vercel build logs, the backend entry file (`src/app.js`) and the deployed commit were not checked |
+| Running behind Vercel's proxy: client IP for rate limits | Not checked (two networks should get separate sign-in limits). HTTPS detection works: the API's own HSTS header is sent (§5) |
+| Atlas from serverless functions: cold starts, connection counts, failover | Not tested; the health check shows the database connected (§5) |
 | P1-1, P2-1, P2-2 and P2-3 in a real browser, including visual checks | Automated tests only (§2). The DOM tests simulate clicks and typing in jsdom: no real browser, layout, visual appearance or real API responses |
 | A visible loading indicator during the Account Security retry | Does not exist, so it cannot be verified. The warning and its button are removed while the retry runs (§2) |
 | A clean-clone run | Not performed: the local runs reused the installed dependencies and the working tree. CI does install from scratch, but only for committed code |
@@ -215,9 +248,9 @@ Checked by `logPrivacy` with simulated errors. It has **not** been seen with a l
 | Load or performance testing | Not performed |
 | Duplicate-submission protection in a browser | API-tested only |
 | A real `SIGTERM` to the API process on Windows | Windows cannot deliver it, so it is skipped locally. It passed on Linux in CI at `cbaf2fd` (§2). The shutdown logic itself is tested on every platform with simulated signals |
-| `TRUST_PROXY` (client address and HTTPS behind a host's proxy) | Proposed only; depends on the chosen host |
+| `TRUST_PROXY` value on the live API | Implemented (PR #22) and apparently set (the HSTS header, §5); its value and the rate-limit check above are not verified |
 | Ticket changes in the final analytics browser run | Status, priority and assignment changes were not repeated there, because that run adds no data. They are covered by the backend suite and the real-backend SLA run above, on the same ticket code |
-| Analytics on a hosted database | Timings are local only. Real (Atlas) data has not been read: older tickets there are expected to show as No SLA |
+| Analytics on a hosted database | Timings are local only. The live deployment uses the existing Atlas database, but its data has not been read for these checks: older tickets there are expected to show as No SLA |
 | A priority change refreshing the badge in Admin Tickets, in a browser | The admin dialog gained a priority control in P2-1. The badge and deadline are checked from a fake API response in unit and DOM tests (`adminTickets.render`), not in a browser. In a browser this was checked in Agent Inbox, with both simulated and real data, before P2-1 |
 
 ## 8. How to reproduce

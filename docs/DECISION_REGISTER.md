@@ -6,6 +6,8 @@ This register lists the product and policy questions the team still has to settl
 
 Audited on **31 October 2026**, against `main` at `85511b4` plus the uncommitted working tree of that date. Current behaviour was checked by reading the code, not by running a browser or a deployed system.
 
+**Updated on 5 November 2026** for the live deployment (Vercel, MongoDB Atlas, Resend): R-8, R-10, R-17 and §8 only. The rest of the register still reflects the 31 October audit. The app went live with the other items in §3 still unresolved, including those marked "Before deployment".
+
 ## Contents
 
 1. [Summary](#1-summary)
@@ -38,6 +40,7 @@ Audited on **31 October 2026**, against `main` at `85511b4` plus the uncommitted
 | Open | No decision recorded. "Not recorded" means the question appears in no earlier project document. |
 | Proposed | A suggestion is written down, but nobody has agreed to it. |
 | Default | An engineering default chosen so work could continue. Not a team approval. |
+| In use | Implemented and running on the live deployment, chosen by the approval owner, but no team approval is recorded. Still counted as unresolved. |
 | Approved | Only with explicit evidence. See §2. |
 
 ## 2. Approval status and evidence
@@ -74,9 +77,9 @@ Items marked **Confirmed** in `docs/DATA_MODEL.md` come from handbook requiremen
 | R-5 | Are the reset and email-change link rules right? | Open, not recorded | Swatismita | Before deployment |
 | R-6 | Should ticket creation and replies be rate limited? | Open, not recorded | Swatismita, Ayushi Rathi | Before deployment |
 | R-7 | Are the ticket and reply limits right? | Proposed | Swatismita, Ayushi Rathi | Can wait |
-| R-8 | How should the API trust the host's proxy? | Proposed | Tirth Vaghela | Before deployment |
+| R-8 | How should the API trust the host's proxy? | In use (`TRUST_PROXY`) | Tirth Vaghela | Before deployment (now live) |
 | R-9 | Will the API run as one process or several? | Open | Tirth Vaghela | Before deployment |
-| R-10 | Which host, production database and email provider? | Open | Tirth Vaghela | Before deployment |
+| R-10 | Which host, production database and email provider? | In use (Vercel, MongoDB Atlas, Resend) | Tirth Vaghela | Before deployment (now live) |
 | R-11 | Can a resolved ticket be reopened? | Default, also listed as a product decision | Ayushi Rathi | Can wait |
 | R-12 | What can customers do with their own tickets? | Open, not recorded | Swatismita, Ayushi Rathi | Can wait |
 | R-13 | Should customers see staff names? | Open, not recorded | Owner confirmation needed | Can wait |
@@ -195,8 +198,8 @@ Items marked **Confirmed** in `docs/DATA_MODEL.md` come from handbook requiremen
 
 #### R-8 — How should the API trust the host's proxy?
 
-- **Current behaviour:** Express `trust proxy` is not set. Behind a hosting proxy, every request would appear to come from the proxy: all users would share one sign-in limit, and HSTS would never be sent.
-- **Status:** Proposed. The README describes a `TRUST_PROXY` setting that is not implemented.
+- **Current behaviour (updated 5 November 2026):** Implemented as `TRUST_PROXY` (PR #22): a hop count from 0 to 10, default 0; `true` and `*` are refused. The README gives `1` for Vercel. On the live API the app's own HSTS header is sent, which indicates the setting is in place; its value, and separate sign-in limits for different networks, have not been checked.
+- **Status:** In use. Built as the README proposed; no team approval is recorded.
 - **Options and trade-offs:** Add the setting as proposed: correct and safe, but the number must match the host. Trust every proxy: simple, but a client could fake its address and bypass limits. Leave it: acceptable only without a proxy.
 - **Recommendation (not a decision):** The README's proposal, set once the host is chosen, because the other options either fail behind a proxy or weaken the rate limits.
 - **Approval owner:** Tirth Vaghela (deployment coordination).
@@ -213,8 +216,8 @@ Items marked **Confirmed** in `docs/DATA_MODEL.md` come from handbook requiremen
 
 #### R-10 — Which host, production database and email provider?
 
-- **Current behaviour:** Not deployed. Development writes emails to a local folder, and production needs SMTP settings.
-- **Status:** Open. The README says these are still to be chosen.
+- **Current behaviour (updated 5 November 2026):** Live. Frontend and API are two Vercel projects (<https://help-desk-web-app.vercel.app/> and <https://help-desk-backend-nine.vercel.app/>); the database is the existing MongoDB Atlas database; email goes through Resend (`EMAIL_TRANSPORT=resend`) from `support@tirthvaghela.in` on the verified domain `tirthvaghela.in`. Development still writes emails to a local folder.
+- **Status:** In use, chosen by Tirth Vaghela as approval owner (recorded from the project owner's statement on 5 November 2026). Team agreement on cost is not recorded. Reusing the existing Atlas database, rather than a separate production database, is part of this choice; what else that database holds is not recorded here.
 - **Options and trade-offs:** Depends on cost, region and free-tier limits. The audit did not compare providers.
 - **Recommendation (not a decision):** None.
 - **Approval owner:** Tirth Vaghela (deployment coordination), with team agreement where cost is involved.
@@ -316,7 +319,7 @@ Items marked **Confirmed** in `docs/DATA_MODEL.md` come from handbook requiremen
 
 #### R-17 — How reliable must email delivery be?
 
-- **Current behaviour:** There are no retries and no queue. A failed status email or notice is logged and lost. A failed email-change confirmation returns `503`, and nothing stays pending. On shutdown, the API waits up to 5 seconds for status emails, within a 10-second limit, then abandons any left. A forgot-password email is not waited for, so a shutdown at that moment can lose it, as the README notes.
+- **Current behaviour:** There are no retries and no queue. A failed status email or notice is logged and lost. A failed email-change confirmation returns `503`, and nothing stays pending. On shutdown (`npm start`), the API waits up to 5 seconds for background email work (status emails and forgot-password requests), within a 10-second limit, then abandons any left. On Vercel the same work is passed to `waitUntil`; work still running when the function's time limit ends is lost. The live deployment uses Resend. Resend plans have sending limits (the free plan: 100 a day); a refused email is only logged. (Updated 5 November 2026.)
 - **Status:** Open, not recorded. Behaviour is documented, but nobody has accepted the risk.
 - **Options and trade-offs:** Accept the loss: simple, and fine for a small project, but emails can vanish silently. Retry a few times: covers short outages, still lost on restart. Durable queue: reliable, but adds storage and background work.
 - **Recommendation (not a decision):** Decide after R-10, because retry needs depend on the provider.
@@ -455,7 +458,7 @@ Each was found by comparing the documents with the code. Nothing here has been c
 | Approvals outside GitHub and these documents | Meetings and chat are not available to this audit. Such decisions stay unresolved until recorded |
 | Handbook and brief statements | The brief is kept outside this repository, so quotes rely on `API_CONTRACT.md` and `DATA_MODEL.md` |
 | R-4 (browser behaviour after a role change), TD-1, TD-2 | Found by reading the code. None was run or reproduced |
-| Behaviour on a real host, real SMTP or real data | Not deployed, and not tested for this audit. See `TEST_EVIDENCE.md` §7 |
+| Behaviour on a real host, real email or real data | The 31 October audit predates the deployment. The app is live on Vercel (as of 5 November 2026); the production checks done so far, and those still pending, are in `TEST_EVIDENCE.md` §5 and §7 |
 | Volumes behind R-7, R-18 and R-21 | No measurements exist of notification, comment or submission growth |
 | The reason for R-13's mixed approach and R-15's "approved" comment | No record explains either one |
 
