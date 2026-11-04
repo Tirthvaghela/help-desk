@@ -271,3 +271,30 @@ describe('JWT_EXPIRES_IN', () => {
     }
   });
 });
+
+describe('TRUST_PROXY', () => {
+  const read = (TRUST_PROXY) => readEnv({ ...base, MONGODB_URI: 'mongodb://127.0.0.1/helpdesk', TRUST_PROXY });
+
+  it('defaults to 0 (no proxy) when unset or empty', () => {
+    assert.equal(read(undefined).env.trustProxy, 0);
+    assert.equal(read('').env.trustProxy, 0);
+  });
+
+  it('accepts whole numbers from 0 to 10, as numbers', () => {
+    for (const [value, expected] of [['0', 0], ['1', 1], ['2', 2], ['10', 10]]) {
+      const { env, errors } = read(value);
+      assert.deepEqual(errors, [], value);
+      assert.equal(env.trustProxy, expected, value);
+      assert.equal(typeof env.trustProxy, 'number', 'Express reads a string as an IP address list');
+    }
+  });
+
+  it('refuses booleans, wildcards, negatives, out-of-range, decimals and malformed values', () => {
+    for (const value of ['true', 'false', '*', '-1', '11', '100', '1.5', '01', ' 1', '1 ', 'one', '0x1', '1e1', 'loopback', '127.0.0.1']) {
+      const { env, errors } = read(value);
+      assert.equal(errors.length, 1, `${JSON.stringify(value)} → ${JSON.stringify(errors)}`);
+      assert.match(errors[0], /^TRUST_PROXY must be a whole number from 0 to 10/);
+      assert.equal(env.trustProxy, 0, value);
+    }
+  });
+});

@@ -45,6 +45,10 @@ export function rejectZstdBodies(req, res, next) {
 const app = express();
 // Don't advertise the server framework in every response.
 app.disable('x-powered-by');
+// Before any middleware reads req.ip (rate limits) or req.secure (HSTS). A hop count (TRUST_PROXY,
+// default 0 = trust no proxy), never true: only the last N hops are believed, so a client cannot
+// choose its own address or protocol by sending its own X-Forwarded-* headers.
+app.set('trust proxy', env.trustProxy);
 
 app.use(securityHeaders({ hsts: env.nodeEnv === 'production' }));
 // The normalised origins from config/envRules.js. One origin: that origin on every response, as
