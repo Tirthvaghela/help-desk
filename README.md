@@ -98,7 +98,7 @@ Ticket lifecycle: **Open → In Progress → Resolved**, with a timestamped repl
 | User flows, wireframes, test evidence | 📝 [docs/USER_FLOWS.md](docs/USER_FLOWS.md), [docs/WIREFRAMES.md](docs/WIREFRAMES.md), [docs/TEST_EVIDENCE.md](docs/TEST_EVIDENCE.md) |
 | Backend tests (`node:test` + Supertest); frontend unit tests and real React DOM tests (`node:test`, jsdom, Testing Library) | ✅ Implemented. Browser, visual and end-to-end tests are not implemented |
 | API contract | 📝 [docs/API_CONTRACT.md](docs/API_CONTRACT.md); a few points are still open (see below) |
-| Deployment | ⏳ Not deployed yet: host and production database still to be chosen (see [Deployment readiness](#deployment-readiness)) |
+| Deployment | ⏳ Not deployed yet. Planned: Vercel (two projects, API and frontend) with MongoDB Atlas; the code is prepared for it, but nothing has been tested on a real host (see [Deployment readiness](#deployment-readiness)) |
 
 ## Tech stack
 
@@ -108,7 +108,7 @@ Ticket lifecycle: **Open → In Progress → Resolved**, with a timestamped repl
 | Backend | Node.js, Express 5, Mongoose |
 | Database | MongoDB |
 | Testing | Node's built-in test runner (`node:test`); Supertest (backend); jsdom and Testing Library (frontend) |
-| DevOps | Git/GitHub; deployment target to be confirmed (Render or equivalent) |
+| DevOps | Git/GitHub, GitHub Actions; planned hosting: Vercel with MongoDB Atlas (not deployed yet) |
 
 ## Project structure
 
@@ -123,8 +123,8 @@ help-desk/
 │   │   ├── routes/        one router per area, mounted in app.js
 │   │   ├── services/      email.js (transports, background delivery), emailTemplates.js
 │   │   ├── utils/         ApiError, validation, ticket access/query/serializers, sla.js, analytics.js, dateParams.js, idempotency.js, notifications, ticket emails
-│   │   ├── app.js         Express app: middleware + route mounting
-│   │   ├── server.js      Entry point: connect DB, then start listening
+│   │   ├── app.js         Express app: middleware + route mounting (the entry point on Vercel; planned, not tested yet)
+│   │   ├── server.js      Entry point for npm start / npm run dev: connect DB, then start listening
 │   │   └── startServer.js Port errors and graceful shutdown
 │   ├── scripts/           seed-categories.js, create-staff.js, check-categories.js, seed-demo.js (lib/: target guards, data)
 │   ├── test/              node:test + Supertest; helpers/ (isolated test database, factories)
@@ -139,6 +139,9 @@ help-desk/
 │   │   ├── pages/         HomePage (landing), customer/, agent/, admin/, account/, StaffLogin, StaffAccount, NotFoundPage
 │   │   ├── App.jsx        Routes
 │   │   └── main.jsx       Entry point
+│   ├── vercel.json        Vercel: rewrites to index.html, security headers
+│   ├── contentSecurityPolicy.js  CSP written into index.html at build time
+│   ├── vite.config.js     Build: requires VITE_API_URL
 │   ├── test/              node:test unit tests, and real React DOM tests (jsdom, Testing Library; *.render.test.js, accountSecurity.test.js); helpers/
 │   ├── .env.example
 │   └── package.json
@@ -156,7 +159,7 @@ help-desk/
 
 ## Prerequisites
 
-- **Node.js** 22.12 or newer (LTS). The project is developed and tested on Node 22. Check with `node --version`.
+- **Node.js 22**, version 22.12 or later, not 23 or newer (`engines` in both `package.json` files: `>=22.12.0 <23.0.0`). The project is developed and tested on Node 22. Check with `node --version`.
 - **MongoDB**, either a local install (default URI `mongodb://127.0.0.1:27017/helpdesk`) or a MongoDB Atlas connection string
 - **Git**
 
@@ -269,8 +272,10 @@ Never commit `.env`. Only the `.env.example` files, which contain dummy values, 
 | `AUTH_RATE_LIMIT_MAX` | No (default 20; 0 in tests) | Sign-in and sign-up attempts allowed per client IP per window (separate budgets). `0` turns limiting off. | `20` |
 | `AUTH_RATE_LIMIT_WINDOW_MS` | No (default 900000 = 15 min) | Rate-limit window | `900000` |
 | `SENSITIVE_RATE_LIMIT_MAX` | No (default 5; 0 in tests) | Password-reset requests, reset-link attempts and password/email changes per IP per window | `5` |
-| `EMAIL_TRANSPORT` | No | `smtp`, `outbox` (development default: writes emails to `backend/.outbox/`), `memory` (tests), `disabled`. Production default: `smtp` | `smtp` |
-| `EMAIL_FROM` | With `smtp` | Sender address | `Help Desk <no-reply@your-domain>` |
+| `TRUST_PROXY` | No (default 0) | How many proxies sit in front of the API, a whole number from 0 to 10; anything else stops the server at startup. See [`TRUST_PROXY`](#trust_proxy). | `0` locally, `1` on Vercel |
+| `EMAIL_TRANSPORT` | No | `smtp`, `resend` (Resend HTTP API), `outbox` (development default: writes emails to `backend/.outbox/`), `memory` (tests), `disabled`. Production default: `smtp` | `smtp`, `resend` |
+| `EMAIL_FROM` | With `smtp` or `resend` | Sender address. With `resend`, use a domain verified in Resend; the test sender `onboarding@resend.dev` only delivers to the Resend account owner's own address (see [Email](#email)). | `Help Desk <no-reply@your-domain>` |
+| `RESEND_API_KEY` | With `resend` | Resend API key. Set it only in the host's environment settings, never in Git; it is never logged. | `re_…` |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS` | `SMTP_HOST` with `smtp` | SMTP server and credentials (port 587, secure=false by default). `SMTP_USERNAME` / `SMTP_PASSWORD` also work. | |
 | `EMAIL_OUTBOX_DIR` | No | Folder for `outbox` emails | `backend/.outbox` (default) |
 | `PASSWORD_RESET_TTL_MINUTES` | No (default 30) | Reset-link lifetime | `30` |
@@ -282,18 +287,22 @@ The backend exits on startup with a clear message if a required variable is miss
 
 ### Email
 
-Password reset, email-change confirmation, security notices and **ticket status emails** are sent by `backend/src/services/email.js` (Nodemailer).
+Password reset, email-change confirmation, security notices and **ticket status emails** are sent by `backend/src/services/email.js`: through Nodemailer for `smtp`, or through Resend's HTTP API for `resend`.
 
-- **Ticket status emails:** when the assigned agent or an admin moves a ticket to *In progress* or *Resolved*, the ticket's customer (if their account is active) gets one email with the ticket number, their subject, the previous and new status and a link to the ticket. It never names the agent. It is sent in the background, so the API answers straight away; a failed delivery never undoes the change. A failure is logged with its purpose and error codes only (see [Known limitations](#known-limitations-and-open-decisions)). On shutdown the API waits up to 5 seconds for these emails.
+- **Ticket status emails:** when the assigned agent or an admin moves a ticket to *In progress* or *Resolved*, the ticket's customer (if their account is active) gets one email with the ticket number, their subject, the previous and new status and a link to the ticket. It never names the agent. It is sent in the background, so the API answers straight away; a failed delivery never undoes the change. A failure is logged with its purpose and error codes only (see [Known limitations](#known-limitations-and-open-decisions)).
+- **Background work:** ticket status emails, and everything a forgot-password request does after its response (account lookup, cooldown check, reset link, email), run as tracked background work. On shutdown (`npm start`) the API waits up to 5 seconds for it. On Vercel each task is also passed to `waitUntil` (`@vercel/functions`), which asks Vercel to keep the function running until the task ends, within the function's maximum duration; **this has not been tested on Vercel yet** (see [Deployment readiness](#deployment-readiness)).
 - **Templates:** ticket status and password reset emails share one HTML layout (tables and inline styles, for email clients) and have a plain-text version. The other account emails use a simpler layout.
 - **SMTP timeouts:** a connection attempt or the server's greeting is abandoned after 10 seconds, and an open connection after 20 seconds of silence, so an unresponsive email server never hangs a request or a shutdown.
+- **Resend timeout:** a request to Resend that has not answered within 10 seconds is abandoned. Sends are not retried.
 
 - **Development (default):** nothing is sent. Each email is written to `backend/.outbox/` (git-ignored) as a text file; open it to use the link. Only the plain-text part is saved, so the HTML design cannot be seen there. The folder contains one-time links, so do not share it.
-- **Production:** set `EMAIL_TRANSPORT=smtp`, `EMAIL_FROM` and `SMTP_HOST` (plus `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS` from your provider, e.g. Mailtrap, Brevo, SendGrid SMTP, Amazon SES SMTP or a Gmail app password). The server refuses to start in production with `outbox`/`memory`, or with `smtp` but no `SMTP_HOST`/`EMAIL_FROM`. `EMAIL_TRANSPORT=disabled` turns email off explicitly (password reset then cannot work).
+- **Production, SMTP:** set `EMAIL_TRANSPORT=smtp`, `EMAIL_FROM` and `SMTP_HOST` (plus `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS` from your provider, e.g. Mailtrap, Brevo, SendGrid SMTP, Amazon SES SMTP or a Gmail app password).
+- **Production, Resend (planned for Vercel):** set `EMAIL_TRANSPORT=resend`, `RESEND_API_KEY` and `EMAIL_FROM`. `EMAIL_FROM` must use a domain verified in Resend: the test sender `onboarding@resend.dev` delivers only to the Resend account owner's own address. Resend's free plan has daily and monthly sending limits; over a limit, Resend refuses the email (HTTP 429), which is only logged. A failure logs the purpose, a code (`RESEND_HTTP_ERROR`, `RESEND_TIMEOUT` or `RESEND_NETWORK_ERROR`), the HTTP status and Resend's error name (e.g. `code=RESEND_HTTP_ERROR responseCode=422 name=validation_error`), never the key, address, link or Resend's message text. Tested against a simulated Resend API only; no real email has been sent through it.
+- The server refuses to start in production with `outbox`/`memory`, with `smtp` but no `SMTP_HOST`/`EMAIL_FROM`, or with `resend` but no `RESEND_API_KEY`/`EMAIL_FROM` (the message names the missing settings, never their values). `EMAIL_TRANSPORT=disabled` turns email off explicitly (password reset then cannot work).
 - **Links** in emails are built from `CLIENT_URL`, never from request headers.
 - Credentials only ever come from the environment; nothing is hard-coded.
 
-Over the rate limit, sign-in and sign-up return `429 RATE_LIMITED` with a `Retry-After` header, and the sign-in pages show "Too many sign-in attempts…". The limiter keeps its counts in memory per API process; behind a reverse proxy, enable Express `trust proxy` so the real client IP is used.
+Over the rate limit, sign-in and sign-up return `429 RATE_LIMITED` with a `Retry-After` header, and the sign-in pages show "Too many sign-in attempts…". The limiter keeps its counts in memory per API process; behind a reverse proxy, set [`TRUST_PROXY`](#trust_proxy) so the real client IP is used.
 
 Generate a strong `JWT_SECRET`:
 
@@ -305,7 +314,7 @@ node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
 
 | Variable | Purpose | Example |
 | --- | --- | --- |
-| `VITE_API_URL` | Backend base URL | `http://localhost:4000` |
+| `VITE_API_URL` | Backend base URL. The development server falls back to `http://localhost:4000`; **`npm run build` stops with a message** if it is missing or not an `http(s)` URL without a query, fragment or credentials. | `http://localhost:4000` |
 
 `VITE_` variables are bundled into the browser code, so never put secrets in them.
 
@@ -393,6 +402,8 @@ What the backend tests cover:
 - `sla.test.js`, `slaTickets.test.js`: SLA settings, due-date and state rules at exact boundaries (fixed dates), due dates on creation (including idempotent creation and replay), priority changes, older tickets without a due date, and staff-only visibility
 - `emailTemplates.test.js`: the ticket status and password reset emails (layout, HTML and plain-text parts, wording, links, escaping, the `Hi there,` fallback, no staff data, reset expiry, tokens never in logs)
 - `statusEmails.test.js`: ticket status emails (recipient, contents, escaping, no email for rejected or unrelated changes, inactive customers, delivery failures, background delivery), the outbox transport and SMTP timeouts
+- `resendEmail.test.js`: the Resend transport against a fake `fetch` (request, payload, 10-second limit, HTTP and network errors, what is logged), and `EMAIL_TRANSPORT=resend` in production mode
+- `backgroundEmail.test.js`: background work passed to a stand-in Vercel request context (`waitUntil`), forgot-password work in the background (tracking, same answer for unknown addresses, cooldown) and the warning when no request context exists on Vercel
 - `logPrivacy.test.js`: simulated SMTP rejections quoting the address on each email path, and request-log redaction, leave no address, link or server reply in the logs
 - `databaseConnection.test.js`: connecting on demand, losing and regaining the database through a local proxy (the client is kept, work in flight survives), the health ping, and which answers do and do not need the database
 - `health.test.js`, `errors.test.js`, `validate.test.js`, `models.test.js`, `db-helpers.test.js`, `envConfig.test.js`, `securityHeaders.test.js`, `methodNotAllowed.test.js`: health check, error envelope, helpers, models, the test-database guard, configuration rules, security headers, `405` responses
@@ -410,7 +421,7 @@ Most tests do not need MongoDB. Tests that do need it are **skipped** (shown as 
 - For database tests, call `connectTestDB()` in `before`, `clearTestDB()` in `beforeEach`, and `disconnectTestDB()` in `after`. See `test/health.test.js` for the pattern.
 - Test files run one at a time, so they never clear each other's data.
 
-**Frontend:** `cd frontend && npm test` runs the suite with Node's built-in runner and four pinned test dependencies: `jsdom` 29.1.1, `@testing-library/react` 16.3.3, `@testing-library/dom` 10.4.2 and `@testing-library/user-event` 14.6.8. Latest result, including Linux CI: **417 tests, 83 suites, 0 failed, 0 skipped**. Run `npm run build` to check the app compiles.
+**Frontend:** `cd frontend && npm test` runs the suite with Node's built-in runner and four pinned test dependencies: `jsdom` 29.1.1, `@testing-library/react` 16.3.3, `@testing-library/dom` 10.4.2 and `@testing-library/user-event` 14.6.8. Latest local result (Node 22, 2026-11-05): **437 tests, 90 suites, 0 failed, 0 skipped**. Run `npm run build` to check the app compiles.
 
 - **Unit tests:** the API layer against a fake `fetch` (methods, URLs, bodies, error handling), form validation, session storage, status rules, display helpers, staff filters and paging, status-history display, the CSV export, SLA states and badges, analytics ranges and panels, and the New Ticket category messages. Some render components such as `SlaBadge` and `AnalyticsPanels` to static HTML.
 - **Real React DOM tests:** real screens rendered in jsdom, with typing and clicking through Testing Library and only `fetch` faked. They cover route guards, expired sessions, sign-in and sign-up, My Tickets, New Ticket, customer ticket details, Agent Inbox, the Admin Tickets dialog and Account Security. Not every screen is covered: [docs/FRONTEND_RENDER_TEST_PLAN.md](docs/FRONTEND_RENDER_TEST_PLAN.md) lists the coverage and remaining gaps.
@@ -442,28 +453,31 @@ npm test
 npm run build
 ```
 
+**Dependency audits:** run `npm audit` inside `backend/` and `frontend/` separately (or `npm --prefix backend audit` and `npm --prefix frontend audit` from the repository root). The repository root has no `package.json`, so `npm audit` run there searches the parent folders for one and may audit an unrelated project, for example one in your home folder, reporting vulnerabilities that are not in this project.
+
 ## Deployment readiness
 
-**Not deployed yet.** The hosting provider and the production database are still to be chosen, so nothing below assumes a particular host. The app deploys as two parts: the API (a Node web service) and the frontend (static files).
+**Not deployed yet.** The planned host is **Vercel**, with **MongoDB Atlas** as the production database (see [Planned setup: Vercel and MongoDB Atlas](#planned-setup-vercel-and-mongodb-atlas)). The code has been prepared and tested locally for that setup, but **nothing has been tested on Vercel, Atlas or Resend yet**. The app deploys as two parts: the API (a Node web service, or on Vercel a function) and the frontend (static files). The general notes below apply to any host.
 
 | | Backend (API) | Frontend |
 | --- | --- | --- |
 | Install | `cd backend && npm ci` | `cd frontend && npm ci` |
-| Build | none | `npm run build` → `frontend/dist/` |
-| Start | `npm start` (`node src/server.js`), Node 22.12 or newer | serve `frontend/dist/` as a static site |
+| Build | none | `npm run build` → `frontend/dist/` (needs `VITE_API_URL`) |
+| Start | `npm start` (`node src/server.js`), Node 22 (22.12 or later). On Vercel there is no start command: `src/app.js` runs as a function | serve `frontend/dist/` as a static site |
 | Health check | `GET /api/health`: **200** `{"status":"ok","database":"connected",…}`; **503** `{"status":"degraded","database":"disconnected",…}` when MongoDB does not answer. Any such answer means the API process is running. Each call pings the database (limit about 2.5 s, plus up to about 7 s to connect first if there is no connection yet), so avoid polling it more often than monitoring needs. | |
 
 **Backend environment variables** (set them in the host's secret settings, never in Git; values are described in [Environment variables](#environment-variables)):
 
 - Required: `NODE_ENV=production`, `MONGODB_URI` (the production database, **with the database name** in the URI), `JWT_SECRET` (at least 32 random characters), `CLIENT_URL` (the deployed frontend's origin, e.g. `https://…`, no path).
-- Email: `EMAIL_TRANSPORT=smtp` with `EMAIL_FROM`, `SMTP_HOST` and usually `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`. Production refuses `outbox` and `memory`. `EMAIL_TRANSPORT=disabled` starts without email, but then **password reset and email changes cannot complete**: the screens confirm that a link was sent, and none arrives.
+- Email: `EMAIL_TRANSPORT=smtp` with `EMAIL_FROM`, `SMTP_HOST` and usually `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`; or `EMAIL_TRANSPORT=resend` with `RESEND_API_KEY` and `EMAIL_FROM` (see [Email](#email)). Production refuses `outbox` and `memory`. `EMAIL_TRANSPORT=disabled` starts without email, but then **password reset and email changes cannot complete**: the screens confirm that a link was sent, and none arrives.
+- Behind a proxy: `TRUST_PROXY` (see [`TRUST_PROXY`](#trust_proxy)).
 - Optional: `PORT` (most hosts set it), `CORS_ORIGINS`, `JWT_EXPIRES_IN`, the rate-limit and link-lifetime settings.
 
 The API refuses to start, with a message naming the problem, if a required variable is missing, the secret is weak or the example placeholder, the URI names no database, or production email is misconfigured.
 
-**Frontend:** `VITE_API_URL` (the deployed API's URL) is read **at build time** and built into the files: set it before `npm run build`. Without it the build points at `http://localhost:4000`.
+**Frontend:** `VITE_API_URL` (the deployed API's URL) is read **at build time** and built into the files: set it before `npm run build`. Without it, or with a value that is not an `http(s)` URL, the build stops with a message. The build also writes a Content Security Policy into `index.html` (`frontend/contentSecurityPolicy.js`) that allows requests only to this site and to `VITE_API_URL`'s origin, so changing the API URL needs a new build.
 
-**Frontend routes:** the app uses browser routes (`/tickets/…`, `/agent/dashboard`, `/admin/dashboard?ticket=…`). The static host must answer every path that is not a file with `index.html` (a "rewrite to index.html" or "single-page app" setting); otherwise refreshing a page or opening a link gives 404.
+**Frontend routes:** the app uses browser routes (`/tickets/…`, `/agent/dashboard`, `/admin/dashboard?ticket=…`). The static host must answer every path that is not a file with `index.html` (a "rewrite to index.html" or "single-page app" setting); otherwise refreshing a page or opening a link gives 404. On Vercel, `frontend/vercel.json` does this.
 
 **CORS:** the API answers only `CLIENT_URL` (plus any `CORS_ORIGINS`), compared exactly: scheme, host and port, no trailing slash. Links in emails also use `CLIENT_URL`.
 
@@ -471,8 +485,8 @@ The API refuses to start, with a message naming the problem, if a required varia
 
 | Gap | Effect | Planned fix |
 | --- | --- | --- |
-| Express `trust proxy` is not configured | Behind the host's HTTPS proxy every request appears to come from the proxy: sign-in rate limits are shared by all users, and HSTS is never sent | `TRUST_PROXY`, below, once the host is chosen |
-| Rate limits are kept in memory | Correct for one instance only | Run a single instance, or add a shared store later |
+| Rate limits are kept in memory | Correct for one instance only. On Vercel several instances may run at once, each with its own counts, so a client can get more attempts than the configured limit | Accept for the demo, or add a shared store later |
+| Background emails depend on `waitUntil` on Vercel | If Vercel does not keep the function running after the response, a password reset or ticket status email can be lost (logged once as "Background email: no Vercel request context…") | Check after deploying (see [Not yet verified on Vercel](#not-yet-verified-on-vercel)) |
 
 **Database connection** (`backend/src/config/db.js`, `backend/src/middleware/database.js`): one MongoDB client per running process, with a pool of up to 10 connections and a limit of about 5 seconds to find a server.
 
@@ -489,16 +503,66 @@ Limitations:
 - **The startup category check only runs with `npm start` and `npm run dev`.** On a host that runs only `app.js`, run `npm run check:categories` as part of deployment setup: names that differ only in case stop the unique name index from being built, and the running API does not report it there. `npm run seed:categories` also reports such conflicts.
 - **Not yet verified on a real host:** this has only been tested locally, against a standalone MongoDB behind a test proxy. Serverless behaviour (suspended instances, connection counts), `mongodb+srv` lookups and replica-set failover, such as on Atlas, still need a test after deployment.
 
-**Startup and shutdown** apply when the API runs as a long-lived process with `npm start`; they are not used where only `app.js` runs. In `backend/src/startServer.js`: a port that cannot be opened is reported ("port … is already in use") and the process exits with status 1. On `SIGTERM` (sent by hosts on redeploy, and by `npm run dev` when it restarts) or `SIGINT` (Ctrl+C), the API stops accepting connections, lets requests in progress finish, closes idle connections, waits up to 5 seconds for ticket status emails still being sent, disconnects MongoDB and exits 0; after 10 seconds in total it gives up and exits 1. The forgot-password email is sent after its response and is not waited for, so a shutdown at that moment can lose it; the customer can request another link.
-
-**`TRUST_PROXY` (proposed, not implemented yet).** It tells the API how many proxies sit in front of it, so that `req.ip` is the real client (rate limits) and `req.secure` reflects HTTPS at the proxy (HSTS).
-
-- Values: unset, empty or `0` = no proxy (today's behaviour, right for local development); a whole number `1`–`10` = that many proxies, each adding the client address to `X-Forwarded-For`. Anything else (`true`, `*`, negative, text) is refused at startup: trusting every proxy would let a client choose its own address and bypass rate limits.
-- The number must match the host's actual setup and is set only after the host is chosen. Check it once deployed: with the setting in place, two different networks (e.g. Wi-Fi and a phone hotspot) must get separate sign-in limits, and a request with a made-up `X-Forwarded-For` must still be counted against its real address.
+**Startup and shutdown** apply when the API runs as a long-lived process with `npm start`; they are not used where only `app.js` runs. In `backend/src/startServer.js`: a port that cannot be opened is reported ("port … is already in use") and the process exits with status 1. On `SIGTERM` (sent by hosts on redeploy, and by `npm run dev` when it restarts) or `SIGINT` (Ctrl+C), the API stops accepting connections, lets requests in progress finish, closes idle connections, waits up to 5 seconds for background email work still running (ticket status emails and forgot-password requests), disconnects MongoDB and exits 0; after 10 seconds in total it gives up and exits 1. Work still running after the 5 seconds is abandoned and reported in the log; a customer whose reset email was lost can request another link.
 
 **Data:** `npm run seed:demo` refuses remote databases. On a new production database, run `npm run seed:categories -- --allow-remote` and create the first admin with `npm run create:staff -- --allow-remote` (see [First run](#first-run-initialise-the-database)); never use the public demo password there.
 
-**After deploying, check:** `/api/health` returns 200; customer sign-up, ticket creation and an agent reply work from the deployed frontend (no CORS errors in the browser console); refreshing `/tickets` and a staff dashboard works; a password-reset email arrives (if SMTP is configured); the host's logs show request lines, plus the startup summary (database name, email transport, CORS origins) if the API runs with `npm start`.
+**After deploying, check:** `/api/health` returns 200; customer sign-up, ticket creation and an agent reply work from the deployed frontend (no CORS errors in the browser console); refreshing `/tickets` and a staff dashboard works; a password-reset email arrives (if email is configured); the host's logs show request lines, plus the startup summary (database name, email transport, CORS origins) if the API runs with `npm start`. On Vercel, also go through [Not yet verified on Vercel](#not-yet-verified-on-vercel).
+
+### `TRUST_PROXY`
+
+It tells the API how many proxies sit in front of it, so that `req.ip` is the real client (rate limits) and `req.secure` reflects HTTPS at the proxy (HSTS). Set in `backend/src/config/envRules.js` and applied in `backend/src/app.js`.
+
+- Values: unset, empty or `0` = no proxy (the default, right for local development); a whole number `1`–`10` = that many proxies, each adding the client address to `X-Forwarded-For`. Anything else (`true`, `*`, negative, text) is refused at startup: trusting every proxy would let a client choose its own address and bypass rate limits.
+- **Vercel: `1`** (Vercel's proxy replaces `X-Forwarded-For` with the client's address). Never set it higher than the real number of proxies.
+- Check it once deployed: two different networks (e.g. Wi-Fi and a phone hotspot) must get separate sign-in limits, and a request with a made-up `X-Forwarded-For` must still be counted against its real address. This has not been checked on Vercel yet.
+
+### Planned setup: Vercel and MongoDB Atlas
+
+**Not tested yet.** These are the planned steps, based on the code in this repository and Vercel's documentation; check each one during the first deployment. Settings and secrets go in each Vercel project's environment variables, never in Git.
+
+**MongoDB Atlas:**
+
+- Create a database user for the app, limited to the Help Desk database if possible.
+- Network access: Vercel functions have no fixed outgoing IP addresses by default, so Atlas must accept connections from them. Allowing all addresses (`0.0.0.0/0`) is the simple option; it relies entirely on the database user's strong password.
+- `MONGODB_URI` is the `mongodb+srv://…` connection string **with the database name**, e.g. `mongodb+srv://…mongodb.net/helpdesk?retryWrites=true`. In production the API refuses a URI without a database name.
+
+**Backend project** (Vercel project with Root Directory `backend`):
+
+- Vercel runs an Express app without configuration. It looks for the app in a fixed list of files, `src/app.js` before `src/server.js`; this repository has no `app.js`, `index.js` or `server.js` directly in `backend/`, so **`src/app.js` (which exports the app) should be used**, and `src/server.js` (`npm start`) not at all. Confirm this on the first deployment.
+- Node.js: 22.x (the `engines` field in `backend/package.json`).
+- Environment variables (Production):
+
+  | Variable | Value |
+  | --- | --- |
+  | `NODE_ENV` | `production`. **Required:** the API refuses to start on Vercel without it |
+  | `MONGODB_URI` | the Atlas URI above |
+  | `JWT_SECRET` | at least 32 random characters (see [Environment variables](#environment-variables)) |
+  | `CLIENT_URL` | the frontend's production URL, origin only, e.g. `https://<frontend>.vercel.app` |
+  | `TRUST_PROXY` | `1` |
+  | `EMAIL_TRANSPORT`, `RESEND_API_KEY`, `EMAIL_FROM` | `resend`, the Resend key, and a sender on a domain verified in Resend (see [Email](#email)) |
+
+- The startup summary (database, email transport, CORS origins) is printed only when the API runs through `src/server.js` (`npm start` or `npm run dev`), so it does not appear in Vercel's logs. A configuration error stops the function when it loads, and the message (which never contains a secret) appears in the logs.
+
+**Frontend project** (Vercel project with Root Directory `frontend`, framework preset Vite):
+
+- Build command `npm run build`, output folder `dist`. Node.js 22.x (`engines` in `frontend/package.json`).
+- Environment variable `VITE_API_URL`: the backend project's production URL, e.g. `https://<backend>.vercel.app`, with no path. It is built into the files, so redeploy the frontend after changing it.
+- `frontend/vercel.json` sends every path except `/assets/…` to `index.html` (so refreshing a page works, and a missing asset still gives 404), and adds security headers: `X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, a `Permissions-Policy` and `frame-ancestors 'none'`.
+
+**Order:** create the Atlas database; deploy the backend (`CLIENT_URL` is required, so set it to the frontend project's expected production URL); deploy the frontend with `VITE_API_URL` set to the backend's URL; if the frontend's URL turned out different, correct `CLIENT_URL` and redeploy the backend. Preview deployments get other URLs, which CORS refuses unless listed in `CORS_ORIGINS`; the production URLs are the ones to test. Then initialise the database (see **Data**, above).
+
+#### Not yet verified on Vercel
+
+Each of these needs a check after the first deployment:
+
+- **Node.js 22.x:** each project's build log must show the Node version actually used; confirm it is 22.x (22.12 or later), as `engines` asks, not another default.
+- Vercel loads `src/app.js`, and `GET /api/health` answers 200 from the backend's URL.
+- **Background emails:** request a password reset while nothing else is using the site; the email must arrive, and the logs must not show "Background email: no Vercel request context". Also check a ticket status email.
+- **`TRUST_PROXY=1`** matches Vercel: two different networks (e.g. Wi-Fi and a phone hotspot) get separate sign-in limits, and a made-up `X-Forwarded-For` header does not change which limit applies.
+- **Atlas:** connections from new and resumed function instances, the `mongodb+srv` lookup, and recovery after a failover.
+- **Resend:** delivery from the verified domain, and how its daily limit is reported in the logs.
+- A background email must finish within the function's maximum duration; work still running at that point is lost.
 
 ## API
 
@@ -592,13 +656,13 @@ Express 5 forwards errors thrown in `async` route handlers automatically, so no 
 | Token lifetime (C-3) | 1 day (`JWT_EXPIRES_IN`), no refresh tokens | Confirm |
 | Token storage (C-6) | `sessionStorage`: survives a reload, ends when the tab closes | Confirm |
 | Logout (C-7) | Signing out discards the token in the browser. A password change or reset signs the user out everywhere (token version), and deactivation blocks tokens immediately; there is no single-session server logout. | Confirm |
-| Email delivery | Development writes emails to `backend/.outbox/`; production needs SMTP settings | Choose a provider and add its credentials |
+| Email delivery | Development writes emails to `backend/.outbox/`; production needs SMTP or Resend settings. Resend is planned for Vercel and has been tested only against a simulated API | Verify a sending domain in Resend and add the key to the backend's Vercel settings |
 | Notifications | In-app for every ticket event, refreshed every minute while the page is visible. Email only to customers, for status changes; no push notifications and no email opt-out | Product decision |
 | Internal notes | Not implemented: every reply is visible to the customer | Product decision |
 | Reopening resolved tickets | Status only moves forward (D-3); replies on resolved tickets are allowed | Product decision |
-| Rate limiting | In memory, per process | Shared store if the API runs as several processes |
+| Rate limiting | In memory, per process (on Vercel, per function instance) | Shared store if the API runs as several processes |
 | Deactivated or demoted agents | Their assigned tickets stay assigned; admins see and can reassign them | Confirm |
-| Personal data in server logs | Failed emails log only their purpose and error codes, and request logs leave out query strings, also in the referrer. Tested with simulated SMTP errors, not a live server. Request logs still show URL paths as sent (and client IP and user agent in production). Unexpected server errors are logged in full. | Review before production |
+| Personal data in server logs | Failed emails log only their purpose and error codes (for Resend also the HTTP status and Resend's error name), and request logs leave out query strings, also in the referrer. Tested with simulated SMTP and Resend errors, not a live server. Request logs still show URL paths as sent (and client IP and user agent in production). Unexpected server errors are logged in full. | Review before production |
 
 ## Roadmap
 
@@ -607,4 +671,4 @@ Express 5 forwards errors thrown in `async` route handlers automatically, so no 
 3. Parallel modules: auth, tickets, agent workflow, conversations, admin, UI screens (**done**)
 4. Integration: the HD-104 scenario end to end in the UI (**done**, verified in a real browser)
 5. Testing and refinement against the acceptance criteria (**done**; see [docs/TEST_EVIDENCE.md](docs/TEST_EVIDENCE.md))
-6. Deployment and demo (**next**; see [Deployment readiness](#deployment-readiness))
+6. Deployment and demo (**next**: Vercel and MongoDB Atlas, code prepared, not deployed yet; see [Deployment readiness](#deployment-readiness))

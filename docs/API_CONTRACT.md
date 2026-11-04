@@ -111,6 +111,7 @@ Option (B), an httpOnly cookie, was not chosen.
 ### Base URL
 
 - Local: `http://localhost:4000`
+- Production (planned, **not deployed yet**): the backend's Vercel URL, e.g. `https://<backend>.vercel.app`. It will be recorded here once deployed.
 - Frontend reads it from `VITE_API_URL`.
 - All routes start with `/api`.
 
@@ -499,7 +500,7 @@ Public (the link may be opened on any device). Request: `{ "token": "…" }`. **
 
 ### `POST /api/auth/forgot-password`
 
-Public. Request: `{ "email": "…" }`. **Always 200** with the same `{ "message": "If an account exists for that email, …" }`, whether the account exists, is deactivated or not; the email (if any) is sent after the response. At most one reset email per account per minute. Errors: **400** `VALIDATION_ERROR` (not an email address) · **429**.
+Public. Request: `{ "email": "…" }`. **Always 200** with the same `{ "message": "If an account exists for that email, …" }`, whether the account exists, is deactivated or not; the account lookup and the email (if any) happen after the response, as tracked background work (a server shutdown waits up to 5 seconds for it; on Vercel it is passed to `waitUntil`, not yet tested there). A failure is only logged and never changes the response. At most one reset email per account per minute. Errors: **400** `VALIDATION_ERROR` (not an email address) · **429**.
 
 ### `POST /api/auth/reset-password/check` and `POST /api/auth/reset-password`
 
@@ -647,7 +648,7 @@ Allowed transitions (anything else is rejected):
 
 On success the server appends `{ status, changedBy, changedAt }` to `statusHistory`, and sets `resolvedAt` when the new status is `resolved`.
 
-**Customer email (v0.10).** After a successful change, the ticket's customer gets one email, if their account is active (and they are not the person who made the change). It has an HTML and a plain-text part, and contains the ticket number, the customer's own subject, the previous and new status ("Open", "In progress", "Resolved"), a link to `/tickets/:id` built from `CLIENT_URL`, and why it was sent. It names no agent ("Our support team…") and contains nothing about other users. The email is sent in the background: the response does not wait for it, and a delivery failure is only logged and never undoes the change. The log line has the purpose, the error's code and the numeric SMTP reply code; the address, the link and the server's reply text are not logged. Rejected requests (any error above) send nothing, so a repeated request for the same change cannot send a second email. Assignment, priority changes, replies and ticket creation send no email. Delivery uses `EMAIL_TRANSPORT` (README, "Email").
+**Customer email (v0.10).** After a successful change, the ticket's customer gets one email, if their account is active (and they are not the person who made the change). It has an HTML and a plain-text part, and contains the ticket number, the customer's own subject, the previous and new status ("Open", "In progress", "Resolved"), a link to `/tickets/:id` built from `CLIENT_URL`, and why it was sent. It names no agent ("Our support team…") and contains nothing about other users. The email is sent in the background: the response does not wait for it, and a delivery failure is only logged and never undoes the change. The log line has the purpose, the error's code and the numeric SMTP reply code (with `EMAIL_TRANSPORT=resend`: the HTTP status and Resend's error name); the address, the link and the server's reply text are not logged. Rejected requests (any error above) send nothing, so a repeated request for the same change cannot send a second email. Assignment, priority changes, replies and ticket creation send no email. Delivery uses `EMAIL_TRANSPORT` (README, "Email").
 
 **200**: `{ "ticket": { …Ticket } }`
 
@@ -948,3 +949,4 @@ Modules should throw the specific code where one is listed (e.g. `ApiError.confl
 | 2026-10-31 | Documentation only, no API change: §6 described as implemented, with its routes listed; §6 no longer says email and password changes do not exist; D-1 to D-11 joined in one table; 405, 429 and 503 added to the §2 status table; §4, D-5 and D-7 ownership follow the final team responsibilities. | Tirth Vaghela |
 | 2026-10-31 | v0.13: malformed requests (§2). New error codes `INVALID_BODY_ENCODING`, `INVALID_URL`, `UNSUPPORTED_CHARSET` and `UNSUPPORTED_ENCODING`, and status 415. These requests previously gave 500 `INTERNAL_ERROR`; existing fields and routes are unchanged. zstd request bodies are not supported and give 415. | Tirth Vaghela |
 | 2026-11-01 | v0.14: new error code `DATABASE_UNAVAILABLE` (503, §2) for requests that need an unreachable database, including database connectivity failures that previously gave 500 `INTERNAL_ERROR`; a database check added to the order of checks on protected routes. `GET /api/health` now pings the database (§5); its response fields are unchanged. §5 no longer says the frontend calls it. | Tirth Vaghela |
+| 2026-11-05 | Documentation only, no request or response change: §6a forgot-password says its lookup and email run as tracked background work after the response (kept running on Vercel with `waitUntil`, not yet tested there); §8 status emails note what a Resend failure logs (`EMAIL_TRANSPORT=resend`); §2 lists the planned production base URL (Vercel, not deployed yet). | Tirth Vaghela |
