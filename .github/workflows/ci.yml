@@ -71,3 +71,7 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+        env:
+          # A build needs the backend URL (vite.config.js refuses to build without it); a
+          # placeholder is enough to check that the build works.
+          VITE_API_URL: https://api.example.invalid
