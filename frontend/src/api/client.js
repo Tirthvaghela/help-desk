@@ -1,6 +1,10 @@
+import { apiUrlFor, LOCAL_API_URL, normalizeApiUrl } from './apiUrl.js';
+
 // `import.meta.env` only exists under Vite; the fallback also lets plain Node load this
-// module in the frontend unit tests.
-const API_URL = import.meta.env?.VITE_API_URL || 'http://localhost:4000';
+// module in the frontend unit tests. Production builds always have VITE_API_URL (vite.config.js
+// refuses to build without it), so the localhost fallback is left out of them; trailing slashes
+// are removed.
+const API_URL = normalizeApiUrl(import.meta.env?.VITE_API_URL) || (import.meta.env?.PROD ? '' : LOCAL_API_URL);
 
 // The token each failed request was sent with. Kept here rather than on the error, so it can
 // never appear in logs or messages. The auth provider uses it to tell a 401 for the current
@@ -21,7 +25,7 @@ export async function apiRequest(path, { method = 'GET', body, token, headers: e
 
   let response;
   try {
-    response = await fetch(`${API_URL}${path}`, {
+    response = await fetch(apiUrlFor(API_URL, path), {
       method,
       headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
