@@ -5,7 +5,8 @@ import { ApiError } from '../utils/ApiError.js';
 //   max: requests allowed per window (0 turns the limiter off)
 //   windowMs: window length in milliseconds
 // Over the limit: 429 RATE_LIMITED with a Retry-After header (seconds).
-// Behind a reverse proxy, set Express "trust proxy" so req.ip is the real client.
+// Keyed by req.ip, which app.js resolves from TRUST_PROXY: behind a reverse proxy it must be
+// set, or every client looks like the proxy and shares one count.
 export function createRateLimiter({ max, windowMs, name = 'requests', now = Date.now }) {
   if (!max) {
     return (req, res, next) => next();

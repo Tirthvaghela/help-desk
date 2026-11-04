@@ -104,6 +104,23 @@ function readJwtExpiresIn(source, errors) {
   return raw;
 }
 
+// TRUST_PROXY: how many proxies in front of the API add the client's address to X-Forwarded-For
+// (and set X-Forwarded-Proto). A whole number from 0 to 10; default 0 (no proxy: local
+// development). Express then takes the client address from that many hops back, so req.ip is
+// the real client (rate limits) and req.secure reflects HTTPS at the proxy (HSTS). Too high a
+// number lets a client pick its own address; "true" and "*" trust every hop and are refused.
+export const MAX_TRUST_PROXY = 10;
+
+function readTrustProxy(source, errors) {
+  const raw = source.TRUST_PROXY;
+  if (raw === undefined || raw === '') return 0;
+  if (!/^(?:[0-9]|10)$/.test(raw)) {
+    errors.push(`TRUST_PROXY must be a whole number from 0 to ${MAX_TRUST_PROXY} (the number of proxies in front of the API), got "${raw}"`);
+    return 0;
+  }
+  return Number(raw);
+}
+
 // Startup lines for the log: which database and email transport are in use. Never includes
 // the connection string, credentials or SMTP passwords.
 export function describeConfig(env) {
@@ -169,6 +186,8 @@ export function readEnv(source) {
 
   const env = {
     port: Number(source.PORT) || 4000,
+    // Express "trust proxy" hop count; see readTrustProxy.
+    trustProxy: readTrustProxy(source, errors),
     mongodbUri: source.MONGODB_URI,
     mongodbDatabase: mongodbDatabase || 'test',
     mongodbDatabaseExplicit: Boolean(mongodbDatabase),
