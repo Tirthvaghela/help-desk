@@ -3,8 +3,8 @@ import { sendEmail, sendInBackground } from '../services/email.js';
 import { ticketStatusChangedEmail } from '../services/emailTemplates.js';
 
 // Ticket emails to customers. Called only after a change has been saved; the work runs in
-// the background (services/email.js), so a slow or failing email server never delays or undoes
-// the change. A failure is logged with its purpose and error codes only (safeErrorDetails),
+// the background (services/email.js: tracked for shutdown, and kept alive on Vercel with
+// waitUntil), so a slow or failing email server never delays or undoes the change. A failure is logged with its purpose and error codes only (safeErrorDetails),
 // never the address, the link or the server's reply.
 
 // After PATCH /api/tickets/:id/status: the ticket's own customer, if the account is active and

@@ -7,7 +7,7 @@ import { hashPassword, passwordMatches, requireExistingPassword, requireNewPassw
 import { consumeToken, findToken, invalidLink, issueToken } from '../utils/oneTimeToken.js';
 import { signToken } from '../utils/token.js';
 import { serializeUser } from '../utils/userSerializer.js';
-import { safeErrorDetails, sendEmail, sendEmailQuietly } from '../services/email.js';
+import { safeErrorDetails, sendEmail, sendEmailQuietly, sendInBackground } from '../services/email.js';
 import {
   emailChangedNotice,
   emailChangeRequestedNotice,
@@ -146,13 +146,19 @@ export async function verifyEmailChange(req, res) {
 }
 
 // POST /api/auth/forgot-password — { email } → always the same 200, whether or not the
-// account exists, so the response cannot be used to find registered emails. The email is
-// sent after responding, so timing does not reveal it either.
+// account exists, so the response cannot be used to find registered emails. The lookup and the
+// email happen after responding, so timing does not reveal it either. That work runs as tracked
+// background work (sendInBackground): a shutdown waits for it, and on Vercel the function keeps
+// running until it is done.
 export async function forgotPassword(req, res) {
   const body = requireJsonBody(req.body);
   const email = requireEmail(body.email);
   res.json({ message: FORGOT_PASSWORD_MESSAGE });
+  sendInBackground('password reset', () => sendPasswordReset(email));
+}
 
+// Never throws: each failure is logged with safe details only.
+async function sendPasswordReset(email) {
   try {
     const user = await User.findOne({ email, isActive: true });
     if (!user) return;
